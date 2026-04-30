@@ -2,15 +2,25 @@ services:
   app:
     build: .
     restart: unless-stopped
-    ports:
-      - "5173:5173"
+    env_file: .env
     environment:
       OSTINATO_DB_PATH: /data/ostinato.db
       OSTINATO_SECRETS_PATH: /data/secrets.json
-      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID}
-      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET}
-      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:5173/auth/callback}
-      NODE_ENV: ${NODE_ENV:-production}
+    ports:
+      - "5173:5173"
     volumes:
-      - ./data:/data
+      - ostinato_data:/data
       - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test:
+        - CMD
+        - /nodejs/bin/node
+        - -e
+        - "fetch('http://localhost:5173/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  ostinato_data:
