@@ -10,21 +10,21 @@ The app is **multi-source by design**: Strava is the v1 source; Garmin Connect i
 
 ## Current state (last updated 2026-04-30)
 
-**v1 scaffold complete and verified end-to-end against fixtures.** Path A (real Strava) requires user creds.
+**v1 verified end-to-end against real Strava** (1373 activities, 8 gear items synced from the live API in the deployed container). Fixtures path remains for offline dev.
 
 What ships:
 - SvelteKit (Svelte 5 runes) + TypeScript + Drizzle/better-sqlite3.
 - Schema in `src/lib/server/db/schema.ts` (athletes, gear, activities, sync_state). Postgres-portable: epoch-second integers, INTEGER booleans, no SQLite-isms.
 - Strava client in `src/lib/server/strava/client.ts`. Eager token refresh (60s safety margin), rate-limit accounting, 401-retry-then-fail, 429 with `retryAfter`.
 - OAuth routes: `/auth/connect`, `/auth/callback`, `/auth/disconnect`. CSRF state cookie.
-- Sync flows in `src/lib/server/strava/sync.ts`: `bootstrapSummaries` (full backfill, paged 200/req), `syncIncremental` (cursor on `last_after_epoch`), `enrichDetail(N)` (rate-limit-aware bail), `syncGearAndAthlete` (single `/athlete` call).
+- Sync flows in `src/lib/server/strava/sync.ts`: `bootstrapSummaries` (full backfill, paged 200/req), `syncIncremental` (cursor on `last_after_epoch`), `enrichDetail(N)` (rate-limit-aware bail), `syncGearAndAthlete` (single `/athlete` call). `syncSummaries` snapshots known gear ids per call and nulls any unknown `gear_id` before insert (PR #9 / issue #8) so historical activities on deleted bikes don't trigger `SQLITE_CONSTRAINT_FOREIGNKEY`.
 - Dashboard `/`: Donut + StackedBar + LineArea, range/metric/bucket toggles. StackedBar uses fixed 800×300 viewBox; bar geometry computed from `computeBarLayout(n, innerWidth)` so aspect ratio stays constant across all range/bucket combinations.
 - Gear `/gear`: bike + shoe cards with SQL aggregation; `/gear/[id]` drill-down with sortable table + month sparkline + Heatmap stub.
 - Settings `/settings`: connect/disconnect, sync now, backfill, enrich next 25, rate-limit pill, fixture loader.
 - Fixtures: `scripts/seed-fixtures.ts` + `POST /api/seed` (DEV only). 150 synthetic activities, 3 bikes + 1 shoe, 18-month spread, deterministic via mulberry32 seed=42.
 - **Container**: single-image, distroless runtime, auto-migrates on boot. `docker compose up --build` is the canonical run command. See [Container layout](#container-layout).
 - **CI**: GitHub Actions in `.github/workflows/ci.yml`. Three jobs — `node` (test+build, every PR), `docker-build` + `docker-smoke` (paths-gated, weekly cron backstop). Node version pinned in `.nvmrc`.
-- Tests: 26 vitest specs. Server: UPSERT idempotency, gear aggregation NULL semantics, listGear retired/kind filtering. Pure helpers: `bucketGrid` (dense range coverage), `computeBarLayout` (bar-overflow invariant). All pass.
+- Tests: 28 vitest specs. Server: UPSERT idempotency, gear aggregation NULL semantics, listGear retired/kind filtering, `syncSummaries` unknown-gear nulling. Pure helpers: `bucketGrid` (dense range coverage), `computeBarLayout` (bar-overflow invariant). All pass.
 - Smoke checks pass: `npm run check` (0 err / 0 warn), `npm run build` (clean).
 
 ## Roadmap
@@ -91,15 +91,42 @@ Settings → "Load fixtures" button (calls `/api/seed`, gated on `NODE_ENV=devel
 
 ## TDD workflow
 
-Every behavioral change ships as `issue → branch → red commit → green commit → CI green → PR merge`. Plumbing-only PRs (CI config, docs) skip the red step.
+**Default to red/green TDD for every behavioral change.** No exceptions for "small" bug fixes — the test is what proves the bug existed and protects against regression. Pipeline:
+
+`issue → branch → red commit → green commit → CI green → squash-merge → verify`
+
+Plumbing-only PRs (CI config, docs, dependency bumps) skip the red step.
 
 1. **Open a GitHub issue** describing the change and its acceptance criteria. One issue per deliverable. The issue is the unit-of-work, the PR is the artifact.
-2. **Branch off `main`**: `kind/short-name` (e.g. `fix/chart-zoom`, `container/distroless`, `ci/bootstrap`).
-3. **Red commit**: write the failing test(s) first. For pure helpers that don't yet exist, ship a stub implementation that compiles cleanly so `npm run check` passes — only `npm test` should fail. CI on the PR shows the red state publicly.
-4. **Green commit**: replace the stub with the real implementation. Push. CI flips green.
-5. **Merge**: squash-merge with `gh pr merge <num> --squash --delete-branch`. Linked issue auto-closes via `Closes #N` in the PR body.
+2. **Branch off `main`**: `kind/short-name` (e.g. `fix/chart-zoom`, `fix/sync-unknown-gear`, `container/distroless`, `ci/bootstrap`).
+3. **Red commit**: write the failing test(s) first.
+   - The test must reproduce the actual user-visible bug, not the symptom-of-the-symptom. For sync bugs, stub `StravaClient` and feed real-shaped payloads — don't mock at the `upsertSummary` level.
+   - `npm run check` must still pass at red. Only `npm test` should fail. For pure helpers that don't yet exist, ship a stub implementation that compiles cleanly.
+   - CI on the PR shows the red state publicly. That's the point — the failing build is the documented bug.
+   - Commit message prefix: `test(scope): red — <one-line bug description>`.
+4. **Green commit**: minimal implementation that flips the test green. Don't add unrelated cleanup. Push.
+   - Commit message prefix: `fix(scope): <what>` (or `feat(scope):` for new behavior). Body explains *why*.
+5. **Merge**: `gh pr merge <num> --squash --delete-branch`. Linked issue auto-closes via `Closes #N` in the PR body.
+6. **Verify in target environment**. For container-affecting changes: `docker compose up --build -d`, exercise the affected path, confirm the original failure is gone. The CI gate proves the test passes; verification proves the deployed artifact does too.
 
 The `node` CI job (`npm ci && npm run check && npm test && npm run build`) is the gate. The `docker-build` and `docker-smoke` jobs are paths-gated (only run on container PRs) plus a Monday cron backstop.
+
+### Worked example (PR #9 / issue #8 — sync FK bug)
+
+The sync FK bug is the canonical example of this loop. The user reported `Sync now failed: 500 {"message":"FOREIGN KEY constraint failed"}` from a freshly deployed container.
+
+1. **Diagnose first**, before writing code: query the container's DB to confirm `athletes` row present (FK #1 ruled out), `gear` row count = 8 from `/athlete`, `activities` count = 0. The `gear_id → gear.id` FK is the only remaining candidate. Strava `/athlete` only returns currently-owned gear → historical activities on deleted bikes orphan the FK.
+2. **Issue #8** documents the cause and acceptance criteria. The issue, not the chat history, is the durable artifact.
+3. **Red commit** (`d07d262`): `src/lib/server/strava/sync.test.ts` stubs `StravaClient.listActivities` to return three rows (known gear, deleted gear, no gear). Both assertions fail with `SqliteError: FOREIGN KEY constraint failed`. `npm run check` passes; only the new test file fails. CI shows the red.
+4. **Green commit** (`0075068`): 8-line patch in `syncSummaries` — snapshot known gear ids once per call, null any `insert.gear_id` not in the set. Same test passes. Full suite 28/28 pass.
+5. **Merge + verify**: squash-merge, rebuild container, `POST /api/sync` → `{"summaries":{"upserted":1373}}`. `activities` table now holds 572 rows with gear and 801 with `gear_id IS NULL`. The 801 are the activities the bug was hiding.
+
+What the loop bought us: a permanent regression test that exercises the same code path as production sync (real `syncSummaries`, real DB, fake transport), a public CI artifact that documents the failure mode, and a one-shot verification step that proves the fix works in the deployed container — not just in the test environment.
+
+### When to bend the loop
+- **Pure refactor with no behavior change**: no red commit needed; the existing test suite is the safety net. If no test covers the refactored code, write the test first as a separate PR.
+- **CI / docs / dep bump**: skip red. Note the skip in the PR body.
+- **Spike / exploration**: branch, hack, throw it away. Do not merge spike branches. If the spike works, restart from issue + red on a fresh branch.
 
 ### Pure-helper extraction
 When a Svelte component has a non-trivial bug rooted in math (geometry, aggregation, bucketing), prefer extracting the pure function over reaching for component-level testing infra. Two examples:
@@ -147,6 +174,7 @@ Component-level rendering tests (via `@testing-library/svelte` + jsdom) are not 
 - **Refresh eagerly.** Access token TTL is 6 h. The `StravaClient` checks `expires_at - now < 60s` before every call and refreshes inside the same request path.
 - **`sport_type` not `type`.** The legacy `type` field collapses MTB/Gravel/Road into "Ride". Always group by `sport_type`.
 - **Use `/athlete` for gear.** Returns full bike+shoe lists with names and `frame_type`. Avoids per-id `/gear/{id}` rate spend.
+- **`/athlete` only returns currently-owned gear.** Historical activities reference gear_ids the user has since deleted on Strava. Those orphan FKs will abort the entire sync if inserted naively. `syncSummaries` defends against this by snapshotting known gear ids and nulling unknown ones before insert (PR #9). Never re-introduce a code path that inserts an activity with an unverified `gear_id`.
 - **Detail endpoint is the rate hog.** `GET /api/v3/activities/{id}` is one call per activity. Never auto-bulk-fetch — gate behind manual button or trickled cron.
 - **Rate limits**: 100 / 15 min and 1000 / day, app-wide (not per-user). Read `X-RateLimit-Usage` and `X-RateLimit-Limit` headers; persist to `sync_state`. Sync loops gate themselves on `used < limit - 5`.
 - **Localhost OAuth redirect** is allowed by Strava without HTTPS. No tunneling needed for dev.
