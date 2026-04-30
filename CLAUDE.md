@@ -49,14 +49,16 @@ cp .env.example .env
 # fill STRAVA_CLIENT_ID + STRAVA_CLIENT_SECRET (https://www.strava.com/settings/api)
 # Authorization Callback Domain in Strava app: localhost (bare, no scheme/port/path)
 
-# Local hacking (fast HMR — currently the recommended path):
+# Local hacking (fast HMR):
 npm install
 npm run db:migrate
 npm run dev               # http://localhost:5173
 
-# Docker (partial — see Containerization gaps below):
-npm run db:migrate        # MUST run on host first; container does not migrate on boot
+# Docker (single-container, distroless runtime):
 docker compose up --build -d
+# Migrations run automatically on container boot via scripts/entrypoint.mjs.
+# Healthcheck polls / on 5173.
+# Data persists in the named volume `ostinato_data`.
 ```
 
 Once running:
@@ -66,22 +68,23 @@ Once running:
 4. Optionally **Enrich next 25** to fill in power/cadence/HR averages.
 5. Day-to-day: **Sync now** for incremental updates.
 
-## Containerization gaps
+## Container layout
 
-**Status: partially containerized.** Image builds and serves the SvelteKit production bundle, but the dev loop and DB bootstrapping still rely on the host. To finish:
+**Single container, distroless runtime.** `docker compose up --build` is the canonical run command. Layers:
 
-1. **Auto-migrate on container boot.** Add an entrypoint script that runs `node scripts/migrate.js` (or compiled equivalent) before `node build`. Today, migrations run via `npm run db:migrate` on the host — first boot of a fresh `data/` volume will crash.
-2. **`.env` loading in compose.** `docker-compose.yml` uses `${STRAVA_CLIENT_ID}` substitution which only resolves if `.env` sits next to the compose file. Add explicit `env_file: .env` to remove the implicit dependency, and document it.
-3. **Healthcheck.** Add a `HEALTHCHECK` in the Dockerfile (`curl -f http://localhost:5173/ || exit 1`) and a `healthcheck:` block in compose.
-4. **Dev container with HMR.** Today `docker compose up` builds a production bundle — no live reload. Add a `docker-compose.dev.yml` override (or `target: dev` in Dockerfile) that mounts `./src` and runs `npm run dev`.
-5. **Run as non-root.** Add a `node` user in the Dockerfile and `USER node` for the runtime stage. Adjust `data/` volume ownership accordingly. `secrets.json` chmod 0600 still works.
-6. **Pin Node version + multi-arch.** Currently `node:20-alpine`; consider switching to `node:20-bookworm-slim` (avoids `apk add python3 make g++` step needed for `better-sqlite3` native build) or pre-build a base image with toolchain baked in to speed up CI.
-7. **Document fixture loading inside container.** `docker compose exec app node scripts/seed-fixtures.js` — once the entrypoint runs migrations, this becomes the canonical "load demo data" command.
-8. **Volume init.** `data/` is created by the host via `mkdirSync` in `db/index.ts` and `secrets.ts`. In a fresh container, the bind-mount is rootless-owned by the host but writes happen as container user — verify mode bits when (5) lands.
+- **Builder stage**: `node:22-bookworm-slim` with `python3 make g++` for `better-sqlite3` native build. Runs `npm ci`, `npm run build`, then `npm prune --omit=dev`.
+- **Runtime stage**: `gcr.io/distroless/nodejs22-debian12:nonroot`. No shell, no package manager. Runs as uid 65532. Copies `build/`, `node_modules/`, `scripts/entrypoint.mjs`, and the migrations folder. Pre-creates `/data` with nonroot ownership so the named volume inherits it on first mount.
+- **Entrypoint**: `scripts/entrypoint.mjs` opens `OSTINATO_DB_PATH`, runs Drizzle migrations idempotently, closes the handle, then dynamic-imports `build/index.js` to start the SvelteKit adapter-node server.
+- **Healthcheck**: node-based `fetch('http://localhost:5173/')`. Must be node-based — distroless has no curl/wget.
+- **Storage**: named docker volume `ostinato_data` mounted at `/data`. Both `ostinato.db` and `secrets.json` live there. To browse DB on host: `docker run --rm -v ostinato_ostinato_data:/data alpine ls /data` or copy out via `docker compose cp`.
 
-Optional later:
-- Compose stack with a reverse proxy (Caddy/Traefik) for HTTPS + a public hostname (paves the v3 public-hosting path).
-- Postgres service + a `DATABASE_URL` toggle in `db/index.ts` for the v3 multi-user step.
+### Loading fixtures
+Settings → "Load fixtures" button (calls `/api/seed`, gated on `NODE_ENV=development`). The container ships with `NODE_ENV=production` baked into the Dockerfile; override via `.env` when you want fixtures.
+
+### Future container work
+- Compose stack with a reverse proxy (Caddy/Traefik) for HTTPS + public hostname — paves v3 public-hosting path.
+- Dev-mode override (`docker-compose.dev.yml` with `target: dev` and `npm run dev`) for HMR inside the container.
+- Postgres service + `DATABASE_URL` toggle in `db/index.ts` for v3 multi-user step.
 
 ## Conventions
 
