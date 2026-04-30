@@ -8,7 +8,7 @@ ostinato is a personal cycling/running data visualization app for **Dillon** —
 
 The app is **multi-source by design**: Strava is the v1 source; Garmin Connect is on the roadmap. v1 is local-only single-user, but the schema is Postgres-portable so a future public/multi-user step is not a rewrite.
 
-## Current state (built 2026-04-30)
+## Current state (last updated 2026-04-30)
 
 **v1 scaffold complete and verified end-to-end against fixtures.** Path A (real Strava) requires user creds.
 
@@ -18,18 +18,21 @@ What ships:
 - Strava client in `src/lib/server/strava/client.ts`. Eager token refresh (60s safety margin), rate-limit accounting, 401-retry-then-fail, 429 with `retryAfter`.
 - OAuth routes: `/auth/connect`, `/auth/callback`, `/auth/disconnect`. CSRF state cookie.
 - Sync flows in `src/lib/server/strava/sync.ts`: `bootstrapSummaries` (full backfill, paged 200/req), `syncIncremental` (cursor on `last_after_epoch`), `enrichDetail(N)` (rate-limit-aware bail), `syncGearAndAthlete` (single `/athlete` call).
-- Dashboard `/`: Donut + StackedBar + LineArea, range/metric/bucket toggles.
+- Dashboard `/`: Donut + StackedBar + LineArea, range/metric/bucket toggles. StackedBar uses fixed 800×300 viewBox; bar geometry computed from `computeBarLayout(n, innerWidth)` so aspect ratio stays constant across all range/bucket combinations.
 - Gear `/gear`: bike + shoe cards with SQL aggregation; `/gear/[id]` drill-down with sortable table + month sparkline + Heatmap stub.
 - Settings `/settings`: connect/disconnect, sync now, backfill, enrich next 25, rate-limit pill, fixture loader.
 - Fixtures: `scripts/seed-fixtures.ts` + `POST /api/seed` (DEV only). 150 synthetic activities, 3 bikes + 1 shoe, 18-month spread, deterministic via mulberry32 seed=42.
-- Tests: 11 vitest specs (UPSERT idempotency including detail-preservation, gear aggregation NULL semantics, listGear retired/kind filtering). All pass.
+- **Container**: single-image, distroless runtime, auto-migrates on boot. `docker compose up --build` is the canonical run command. See [Container layout](#container-layout).
+- **CI**: GitHub Actions in `.github/workflows/ci.yml`. Three jobs — `node` (test+build, every PR), `docker-build` + `docker-smoke` (paths-gated, weekly cron backstop). Node version pinned in `.nvmrc`.
+- Tests: 26 vitest specs. Server: UPSERT idempotency, gear aggregation NULL semantics, listGear retired/kind filtering. Pure helpers: `bucketGrid` (dense range coverage), `computeBarLayout` (bar-overflow invariant). All pass.
 - Smoke checks pass: `npm run check` (0 err / 0 warn), `npm run build` (clean).
 
 ## Roadmap
 
 ### v2 immediate next-steps
-- **Full containerization** (see [Containerization gaps](#containerization-gaps) below). Currently host-bootstrapped.
 - **Personal heatmap** of activity polylines, filterable by gear/sport. Polyline decoding via `@mapbox/polyline` + Leaflet/MapLibre + OSM tiles. `Heatmap.svelte` already stubbed.
+- **Component testing infra**: add `@testing-library/svelte` + jsdom so Svelte components (StackedBar, Donut, LineArea, Heatmap) get rendered in tests, not just the pure helpers underneath them. Scheduled follow-up agent will open this PR.
+- **Branch protection on `main`**: require the `node` CI job to pass before merge. Turns the gate from advisory to enforced.
 
 ### v2 (next)
 - HR / calorie / suffer-score dashboards.
@@ -86,6 +89,28 @@ Settings → "Load fixtures" button (calls `/api/seed`, gated on `NODE_ENV=devel
 - Dev-mode override (`docker-compose.dev.yml` with `target: dev` and `npm run dev`) for HMR inside the container.
 - Postgres service + `DATABASE_URL` toggle in `db/index.ts` for v3 multi-user step.
 
+## TDD workflow
+
+Every behavioral change ships as `issue → branch → red commit → green commit → CI green → PR merge`. Plumbing-only PRs (CI config, docs) skip the red step.
+
+1. **Open a GitHub issue** describing the change and its acceptance criteria. One issue per deliverable. The issue is the unit-of-work, the PR is the artifact.
+2. **Branch off `main`**: `kind/short-name` (e.g. `fix/chart-zoom`, `container/distroless`, `ci/bootstrap`).
+3. **Red commit**: write the failing test(s) first. For pure helpers that don't yet exist, ship a stub implementation that compiles cleanly so `npm run check` passes — only `npm test` should fail. CI on the PR shows the red state publicly.
+4. **Green commit**: replace the stub with the real implementation. Push. CI flips green.
+5. **Merge**: squash-merge with `gh pr merge <num> --squash --delete-branch`. Linked issue auto-closes via `Closes #N` in the PR body.
+
+The `node` CI job (`npm ci && npm run check && npm test && npm run build`) is the gate. The `docker-build` and `docker-smoke` jobs are paths-gated (only run on container PRs) plus a Monday cron backstop.
+
+### Pure-helper extraction
+When a Svelte component has a non-trivial bug rooted in math (geometry, aggregation, bucketing), prefer extracting the pure function over reaching for component-level testing infra. Two examples:
+
+- `src/lib/shared/bucket-grid.ts` — dense range coverage, given start/end/bucket. Test in `bucket-grid.test.ts`.
+- `src/lib/components/charts/bar-layout.ts` — bar geometry given bucket count and inner viewBox width. Test in `bar-layout.test.ts`.
+
+Both are imported by `StackedBar.svelte` / `+page.svelte` but tested without a DOM. The component file becomes a thin renderer over deterministic helpers. Property-style assertions (e.g. `barStep * n <= innerWidth` for all `n`) catch regressions a single hardcoded input/output would miss.
+
+Component-level rendering tests (via `@testing-library/svelte` + jsdom) are not yet wired up — that's a planned v2 follow-up.
+
 ## Conventions
 
 ### Charts
@@ -94,6 +119,8 @@ Settings → "Load fixtures" button (calls `/api/seed`, gated on `NODE_ENV=devel
 - Theme via CSS vars on `:root` in `src/app.css`.
 - Palette indexed via `pc(i)` in `charts/palette.ts`.
 - Use `fill-opacity` for intensity (e.g. heatmap-style matrices), not hardcoded color stops.
+- **Fixed viewBox, scaled internals.** Charts use a constant viewBox (e.g. StackedBar = 800×300) so CSS `width:100%;height:auto` preserves a constant aspect ratio across all data shapes. Bar/segment geometry scales to bucket count via pure helpers, never via SVG width drift. The opposite (`svgW = f(bucketCount)`) caused the chart 'zoom' bug fixed in PR #6.
+- **Dense bucket grids.** When a chart's x-axis is time-bucketed, build the row set from a dense grid covering the full selected range (`bucketGrid(start, end, bucket)`), not from the set of buckets that contain data. Empty buckets render as a 2px stub. Keeps the x-axis honest and the bar widths consistent.
 - Pattern source: `/home/dillon/lab/timelog-vibed/frontend/src/routes/charts/+page.svelte`.
 
 ### Storage units
@@ -113,6 +140,7 @@ Settings → "Load fixtures" button (calls `/api/seed`, gated on `NODE_ENV=devel
 ### Env vars
 - **Inside SvelteKit (route handlers, `+server.ts`, server-only `.ts` modules imported via SvelteKit):** read via `import { env } from '$env/dynamic/private'`. Vite does NOT populate `process.env` from `.env` for non-`VITE_` vars in dev — `$env/dynamic/private` is the only source that works in both dev and prod (`adapter-node`).
 - **Inside CLI scripts (`scripts/migrate.ts`, `scripts/seed-fixtures.ts`) run via tsx:** read via `process.env`. SvelteKit runtime is not loaded in these. Defaults exist in `db/index.ts` and `secrets.ts` so scripts work without `.env` loaded.
+- **Inside the docker entrypoint (`scripts/entrypoint.mjs`, plain ESM, no tsx):** also reads via `process.env`. Compose loads `.env` via `env_file:`, then the Dockerfile's `ENV` defaults fill in anything missing. The entrypoint runs migrations then dynamic-imports `build/index.js` to start the server.
 - **Inside modules used by both** (e.g. `db/index.ts`, `secrets.ts`): stick with `process.env` + a sensible default. Inside SvelteKit dev, `process.env` will be empty → falls back to `./data/...` defaults, which is what we want.
 
 ## Strava API gotchas (load-bearing)
