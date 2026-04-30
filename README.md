@@ -22,13 +22,17 @@ npm install
 npm run db:migrate
 npm run dev
 
-# Or Docker:
+# Or Docker (single container, auto-migrates on boot):
 docker compose up --build -d
 ```
 
 Open `http://localhost:5173`, then in **Settings** either:
 - Click **Connect Strava** for real data, or
-- Click **Load fixtures** for synthetic offline data.
+- Click **Load fixtures** for synthetic offline data (requires `NODE_ENV=development` in `.env`).
+
+### Container details
+
+The Docker image is multi-stage: a `node:22-bookworm-slim` builder with the toolchain for `better-sqlite3`'s native build, and a `gcr.io/distroless/nodejs22-debian12:nonroot` runtime. Migrations run automatically on boot via `scripts/entrypoint.mjs`. Data persists in a named volume (`ostinato_data`); to inspect it from the host, use `docker compose cp` or a one-shot `alpine` container.
 
 ## Stack
 
