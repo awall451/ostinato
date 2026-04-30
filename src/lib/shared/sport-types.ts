@@ -56,5 +56,15 @@ export function friendlyLabel(sport: string): string {
 	return FRIENDLY[sport] ?? sport;
 }
 
+type ActivityForSport = { sport_type: string; gear_id: string | null };
+type GearForSport = { frame_type: number | null };
+
+export function effectiveSportType(
+	a: ActivityForSport,
+	_gearById: Map<string, GearForSport>
+): string {
+	return a.sport_type;
+}
+
 export const RIDE_FAMILY = Array.from(RIDE_TYPES);
 export const RUN_FAMILY = Array.from(RUN_TYPES);
