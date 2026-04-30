@@ -5,6 +5,7 @@
 	import { friendlyLabel } from '$lib/shared/sport-types';
 	import { fmtDistance, fmtDuration, metersToMiles, secondsToHours, type UnitSystem } from '$lib/shared/units';
 	import { bucketKey, type Bucket } from '$lib/shared/time';
+	import { bucketGrid } from '$lib/shared/bucket-grid';
 	import type { Activity, Gear } from '$lib/server/db/schema';
 
 	let { data } = $props<{
@@ -63,14 +64,14 @@
 
 	const bucketed = $derived.by(() => {
 		const sportSet = new Set<string>();
-		const seen = new Map<string, Map<string, number>>();
+		const filled = new Map<string, Map<string, number>>();
 		for (const a of data.activities) {
 			sportSet.add(a.sport_type);
 			const k = bucketKey(a.start_date, bucket);
-			let row = seen.get(k);
+			let row = filled.get(k);
 			if (!row) {
 				row = new Map();
-				seen.set(k, row);
+				filled.set(k, row);
 			}
 			const v =
 				metric === 'count'
@@ -82,13 +83,13 @@
 		}
 		const series = [...sportSet].sort();
 		const friendly = series.map(friendlyLabel);
-		const buckets = [...seen.entries()]
-			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-			.map(([key, perRaw]) => {
-				const perSeries = new Map<string, number>();
-				for (const [s, v] of perRaw) perSeries.set(friendlyLabel(s), v);
-				return { key, label: shortBucketLabel(key, bucket), perSeries };
-			});
+		const grid = bucketGrid(data.startEpoch, data.endEpoch, bucket);
+		const buckets = grid.map((key) => {
+			const perRaw = filled.get(key);
+			const perSeries = new Map<string, number>();
+			if (perRaw) for (const [s, v] of perRaw) perSeries.set(friendlyLabel(s), v);
+			return { key, label: shortBucketLabel(key, bucket), perSeries };
+		});
 		return { buckets, series: friendly };
 	});
 

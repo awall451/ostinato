@@ -1,11 +1,17 @@
 /**
  * Returns bar geometry for a stacked bar chart given a bucket count and inner
- * (paddings-already-subtracted) viewBox width. Bars never overflow innerWidth.
- * Stub: returns zero dimensions. Implemented in the green commit.
+ * (paddings-already-subtracted) viewBox width.
+ *
+ * Invariant: `barStep * bucketCount <= innerWidth` for all n >= 1, so bars
+ * never overflow the inner area regardless of bucket count. Bar width is
+ * 75% of step so adjacent bars never touch.
  */
 export function computeBarLayout(
-	_bucketCount: number,
-	_innerWidth: number
+	bucketCount: number,
+	innerWidth: number
 ): { barStep: number; barWidth: number } {
-	return { barStep: 0, barWidth: 0 };
+	const n = Math.max(bucketCount, 1);
+	const barStep = innerWidth / n;
+	const barWidth = barStep * 0.75;
+	return { barStep, barWidth };
 }
