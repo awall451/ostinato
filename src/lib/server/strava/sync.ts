@@ -1,6 +1,6 @@
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../db/schema';
-import { athletes, type ActivityInsert } from '../db/schema';
+import { athletes, gear, type ActivityInsert } from '../db/schema';
 import { upsertGear } from '../repos/gear';
 import { upsertSummary, applyDetail, activitiesNeedingDetail, maxStartDate } from '../repos/activities';
 import { setLastSyncedAt, setFullBackfillAt, getSyncState } from '../repos/sync-state';
@@ -153,6 +153,10 @@ export async function syncSummaries(
 	const after = opts.after ?? 0;
 	const perPage = opts.perPage ?? 200;
 	const now = Math.floor(Date.now() / 1000);
+	// Strava /athlete returns only currently-owned gear, but activities can
+	// reference gear_ids the user has since deleted. Null those before insert
+	// so the activities.gear_id FK does not abort the whole sync.
+	const knownGearIds = new Set(db.select({ id: gear.id }).from(gear).all().map((r) => r.id));
 	let page = 1;
 	let upserted = 0;
 	let maxSeen: number | null = null;
@@ -160,7 +164,9 @@ export async function syncSummaries(
 		const rows = await client.listActivities({ after, page, perPage });
 		if (rows.length === 0) break;
 		for (const a of rows) {
-			upsertSummary(db, summaryToInsert(a, athleteId, now));
+			const insert = summaryToInsert(a, athleteId, now);
+			if (insert.gear_id && !knownGearIds.has(insert.gear_id)) insert.gear_id = null;
+			upsertSummary(db, insert);
 			const t = isoToEpoch(a.start_date);
 			if (maxSeen === null || t > maxSeen) maxSeen = t;
 			upserted++;
