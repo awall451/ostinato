@@ -1,0 +1,234 @@
+import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import * as schema from '../db/schema';
+import { athletes, type ActivityInsert } from '../db/schema';
+import { upsertGear } from '../repos/gear';
+import { upsertSummary, applyDetail, activitiesNeedingDetail, maxStartDate } from '../repos/activities';
+import { setLastSyncedAt, setFullBackfillAt, getSyncState } from '../repos/sync-state';
+import { StravaClient } from './client';
+import { StravaRateLimitError, type StravaSummaryActivity, type StravaDetailedActivity, type StravaAthlete } from './types';
+import { eq } from 'drizzle-orm';
+
+type DB = BetterSQLite3Database<typeof schema>;
+
+export type SyncSummariesResult = {
+	pages: number;
+	upserted: number;
+	maxStartDate: number | null;
+};
+
+export type EnrichResult = {
+	requested: number;
+	enriched: number;
+	rateLimited: boolean;
+};
+
+function isoToEpoch(iso: string): number {
+	return Math.floor(new Date(iso).getTime() / 1000);
+}
+
+function summaryToInsert(a: StravaSummaryActivity, athleteId: number, now: number): ActivityInsert {
+	return {
+		id: a.id,
+		athlete_id: athleteId,
+		name: a.name,
+		sport_type: a.sport_type,
+		type: a.type,
+		start_date: isoToEpoch(a.start_date),
+		start_date_local: isoToEpoch(a.start_date_local),
+		timezone: a.timezone ?? null,
+		utc_offset: a.utc_offset ?? null,
+		distance_m: a.distance,
+		moving_time_s: a.moving_time,
+		elapsed_time_s: a.elapsed_time,
+		total_elevation_gain_m: a.total_elevation_gain ?? 0,
+		elev_high_m: a.elev_high ?? null,
+		elev_low_m: a.elev_low ?? null,
+		gear_id: a.gear_id ?? null,
+		trainer: a.trainer ? 1 : 0,
+		commute: a.commute ? 1 : 0,
+		manual: a.manual ? 1 : 0,
+		private: a.private ? 1 : 0,
+		average_speed: a.average_speed ?? null,
+		max_speed: a.max_speed ?? null,
+		average_watts: a.average_watts ?? null,
+		weighted_average_watts: a.weighted_average_watts ?? null,
+		max_watts: a.max_watts ?? null,
+		kilojoules: a.kilojoules ?? null,
+		device_watts: a.device_watts ? 1 : 0,
+		average_cadence: a.average_cadence ?? null,
+		has_heartrate: a.has_heartrate ? 1 : 0,
+		average_heartrate: a.average_heartrate ?? null,
+		max_heartrate: a.max_heartrate ?? null,
+		suffer_score: a.suffer_score ?? null,
+		summary_polyline: a.map?.summary_polyline ?? null,
+		start_lat: a.start_latlng?.[0] ?? null,
+		start_lng: a.start_latlng?.[1] ?? null,
+		end_lat: a.end_latlng?.[0] ?? null,
+		end_lng: a.end_latlng?.[1] ?? null,
+		raw_summary_json: JSON.stringify(a),
+		created_at: now,
+		updated_at: now
+	};
+}
+
+/** Pulls /athlete, upserts the athlete row, and upserts every bike+shoe in one go. */
+export async function syncGearAndAthlete(client: StravaClient, db: DB): Promise<{ bikes: number; shoes: number }> {
+	const a = (await client.getAthlete()) as StravaAthlete;
+	const now = Math.floor(Date.now() / 1000);
+	const existing = db.select().from(athletes).where(eq(athletes.id, a.id)).all()[0];
+	if (!existing) {
+		db.insert(athletes)
+			.values({
+				id: a.id,
+				username: a.username ?? null,
+				firstname: a.firstname ?? null,
+				lastname: a.lastname ?? null,
+				ftp: a.ftp ?? null,
+				weight_kg: a.weight ?? null,
+				measurement: a.measurement_preference === 'meters' ? 'metric' : 'imperial',
+				created_at: now,
+				updated_at: now
+			})
+			.run();
+	} else {
+		db.update(athletes)
+			.set({
+				username: a.username ?? null,
+				firstname: a.firstname ?? null,
+				lastname: a.lastname ?? null,
+				ftp: a.ftp ?? existing.ftp,
+				weight_kg: a.weight ?? existing.weight_kg,
+				measurement: a.measurement_preference === 'meters' ? 'metric' : 'imperial',
+				updated_at: now
+			})
+			.where(eq(athletes.id, a.id))
+			.run();
+	}
+
+	const bikes = a.bikes ?? [];
+	const shoes = a.shoes ?? [];
+	for (const b of bikes) {
+		upsertGear(db, {
+			id: b.id,
+			athlete_id: a.id,
+			kind: 'bike',
+			name: b.name,
+			brand: b.brand_name ?? null,
+			model: b.model_name ?? null,
+			frame_type: b.frame_type ?? null,
+			primary_flag: b.primary ? 1 : 0,
+			retired: b.retired ? 1 : 0,
+			distance_m: b.distance ?? null,
+			updated_at: now
+		});
+	}
+	for (const s of shoes) {
+		upsertGear(db, {
+			id: s.id,
+			athlete_id: a.id,
+			kind: 'shoe',
+			name: s.name,
+			brand: s.brand_name ?? null,
+			model: s.model_name ?? null,
+			frame_type: null,
+			primary_flag: s.primary ? 1 : 0,
+			retired: s.retired ? 1 : 0,
+			distance_m: s.distance ?? null,
+			updated_at: now
+		});
+	}
+	return { bikes: bikes.length, shoes: shoes.length };
+}
+
+/**
+ * Page through ALL activities since `after` (epoch seconds, default 0 → full backfill).
+ * Idempotent — UPSERT on activity id. Returns total upserted and the max start_date seen.
+ */
+export async function syncSummaries(
+	client: StravaClient,
+	db: DB,
+	athleteId: number,
+	opts: { after?: number; perPage?: number } = {}
+): Promise<SyncSummariesResult> {
+	const after = opts.after ?? 0;
+	const perPage = opts.perPage ?? 200;
+	const now = Math.floor(Date.now() / 1000);
+	let page = 1;
+	let upserted = 0;
+	let maxSeen: number | null = null;
+	while (true) {
+		const rows = await client.listActivities({ after, page, perPage });
+		if (rows.length === 0) break;
+		for (const a of rows) {
+			upsertSummary(db, summaryToInsert(a, athleteId, now));
+			const t = isoToEpoch(a.start_date);
+			if (maxSeen === null || t > maxSeen) maxSeen = t;
+			upserted++;
+		}
+		page++;
+		// Strava returns up to perPage rows; less = last page.
+		if (rows.length < perPage) break;
+	}
+	return { pages: page - 1, upserted, maxStartDate: maxSeen };
+}
+
+/**
+ * Full backfill — equivalent to syncSummaries({ after: 0 }), then stamp last_full_backfill_at.
+ */
+export async function bootstrapSummaries(client: StravaClient, db: DB, athleteId: number): Promise<SyncSummariesResult> {
+	const r = await syncSummaries(client, db, athleteId, { after: 0 });
+	const now = Math.floor(Date.now() / 1000);
+	setFullBackfillAt(db, now);
+	if (r.maxStartDate !== null) setLastSyncedAt(db, now, r.maxStartDate);
+	else setLastSyncedAt(db, now);
+	return r;
+}
+
+/**
+ * Incremental sync — uses sync_state.last_after_epoch (or the DB-observed max start_date,
+ * whichever is later) as the `after` cursor.
+ */
+export async function syncIncremental(client: StravaClient, db: DB, athleteId: number): Promise<SyncSummariesResult> {
+	const state = getSyncState(db);
+	const dbMax = maxStartDate(db) ?? 0;
+	const after = Math.max(state?.last_after_epoch ?? 0, dbMax);
+	const r = await syncSummaries(client, db, athleteId, { after });
+	const now = Math.floor(Date.now() / 1000);
+	setLastSyncedAt(db, now, r.maxStartDate ?? after);
+	return r;
+}
+
+/**
+ * Fetch DetailedActivity for the next `limit` activities lacking detail. Bails on rate-limit.
+ */
+export async function enrichDetail(client: StravaClient, db: DB, limit: number): Promise<EnrichResult> {
+	const rows = activitiesNeedingDetail(db, limit);
+	const now = Math.floor(Date.now() / 1000);
+	let enriched = 0;
+	for (const row of rows) {
+		try {
+			const detail = (await client.getActivity(row.id)) as StravaDetailedActivity;
+			applyDetail(
+				db,
+				row.id,
+				{
+					calories: detail.calories ?? null,
+					device_watts: detail.device_watts ? 1 : 0,
+					max_watts: detail.max_watts ?? null,
+					weighted_average_watts: detail.weighted_average_watts ?? null,
+					kilojoules: detail.kilojoules ?? null,
+					suffer_score: detail.suffer_score ?? null,
+					raw_detail_json: JSON.stringify(detail)
+				},
+				now
+			);
+			enriched++;
+		} catch (e) {
+			if (e instanceof StravaRateLimitError) {
+				return { requested: rows.length, enriched, rateLimited: true };
+			}
+			throw e;
+		}
+	}
+	return { requested: rows.length, enriched, rateLimited: false };
+}

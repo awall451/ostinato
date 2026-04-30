@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      OSTINATO_DB_PATH: /data/ostinato.db
+      OSTINATO_SECRETS_PATH: /data/secrets.json
+      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID}
+      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET}
+      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:5173/auth/callback}
+      NODE_ENV: ${NODE_ENV:-production}
+    volumes:
+      - ./data:/data
+      - /etc/localtime:/etc/localtime:ro
