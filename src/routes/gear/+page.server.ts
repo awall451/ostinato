@@ -1,5 +1,11 @@
 import type { PageServerLoad } from './$types';
-import { listGear, totalsByGear, type GearTotals } from '$lib/server/repos/gear';
+import {
+	listGear,
+	totalsByGear,
+	deletedBikeTotals,
+	type GearTotals,
+	type DeletedBikeTotals
+} from '$lib/server/repos/gear';
 import type { Gear } from '$lib/server/db/schema';
 
 export type GearWithTotals = Gear & { totals: GearTotals | null };
@@ -17,5 +23,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const bikes = enriched.filter((g) => g.kind === 'bike');
 	const shoes = enriched.filter((g) => g.kind === 'shoe');
-	return { bikes, shoes, includeRetired };
+	const deletedBikes: DeletedBikeTotals[] = includeRetired ? deletedBikeTotals(locals.db) : [];
+	return { bikes, shoes, deletedBikes, includeRetired };
 };

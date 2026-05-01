@@ -64,6 +64,41 @@ export function totalsByGear(db: DB): GearTotals[] {
 		.map((r) => r as GearTotals);
 }
 
+export type DeletedBikeTotals = {
+	raw_gear_id: string;
+	count: number;
+	distance_m: number;
+	moving_time_s: number;
+	elev_m: number;
+};
+
+// Bikes deleted on Strava: the activity's gear_id FK was nulled by syncSummaries
+// (PR #9), but raw_summary_json preserves the original gear_id. Strava bike ids
+// start with 'b'; shoes start with 'g'.
+export function deletedBikeTotals(db: DB): DeletedBikeTotals[] {
+	const rawGearId = sql<string | null>`json_extract(${activities.raw_summary_json}, '$.gear_id')`;
+	const rows = db
+		.select({
+			raw_gear_id: rawGearId,
+			count: sql<number>`count(*)`,
+			distance_m: sql<number>`coalesce(sum(${activities.distance_m}), 0)`,
+			moving_time_s: sql<number>`coalesce(sum(${activities.moving_time_s}), 0)`,
+			elev_m: sql<number>`coalesce(sum(${activities.total_elevation_gain_m}), 0)`
+		})
+		.from(activities)
+		.where(
+			sql`${activities.gear_id} IS NULL
+				AND ${activities.raw_summary_json} IS NOT NULL
+				AND ${rawGearId} IS NOT NULL
+				AND ${rawGearId} LIKE 'b%'
+				AND ${rawGearId} NOT IN (SELECT ${gear.id} FROM ${gear})`
+		)
+		.groupBy(rawGearId)
+		.orderBy(sql`coalesce(sum(${activities.distance_m}), 0) DESC`)
+		.all();
+	return rows.filter((r): r is DeletedBikeTotals => r.raw_gear_id !== null);
+}
+
 export function upsertGear(db: DB, row: typeof gear.$inferInsert): void {
 	db.insert(gear)
 		.values(row)

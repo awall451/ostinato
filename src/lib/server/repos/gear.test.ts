@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from '../db/schema';
 import { athletes, gear } from '../db/schema';
 import { upsertSummary } from './activities';
-import { totalsByGear, listGear, upsertGear } from './gear';
+import { totalsByGear, listGear, upsertGear, deletedBikeTotals } from './gear';
 
 let db: BetterSQLite3Database<typeof schema>;
 
@@ -100,6 +100,67 @@ describe('totalsByGear', () => {
 		const t = totalsByGear(db);
 		expect(t.length).toBe(1);
 		expect(t[0].gear_id).toBe('b1');
+	});
+});
+
+describe('deletedBikeTotals', () => {
+	function orphanRide(id: number, rawGearId: string | null, dist: number, time: number, elev: number) {
+		const now = Math.floor(Date.now() / 1000);
+		upsertSummary(db, {
+			id,
+			athlete_id: 1,
+			name: `r${id}`,
+			sport_type: 'Ride',
+			start_date: now,
+			start_date_local: now,
+			distance_m: dist,
+			moving_time_s: time,
+			elapsed_time_s: time,
+			total_elevation_gain_m: elev,
+			gear_id: null, // PR #9 nulled the FK
+			raw_summary_json: JSON.stringify({ gear_id: rawGearId }),
+			average_speed: dist / time,
+			has_heartrate: 0,
+			created_at: now,
+			updated_at: now
+		});
+	}
+
+	it('aggregates rides whose original gear is no longer in the gear table', () => {
+		orphanRide(101, 'b_deleted_a', 10000, 1800, 100);
+		orphanRide(102, 'b_deleted_a', 20000, 3600, 200);
+		orphanRide(103, 'b_deleted_b', 30000, 5400, 300);
+		const rows = deletedBikeTotals(db);
+		const m = new Map(rows.map((r) => [r.raw_gear_id, r]));
+		expect(rows.length).toBe(2);
+		expect(m.get('b_deleted_a')!.distance_m).toBe(30000);
+		expect(m.get('b_deleted_a')!.count).toBe(2);
+		expect(m.get('b_deleted_a')!.moving_time_s).toBe(5400);
+		expect(m.get('b_deleted_a')!.elev_m).toBe(300);
+		expect(m.get('b_deleted_b')!.distance_m).toBe(30000);
+	});
+
+	it('excludes rides with null raw gear_id', () => {
+		orphanRide(101, 'b_deleted', 10000, 1800, 100);
+		orphanRide(102, null, 20000, 3600, 200);
+		const rows = deletedBikeTotals(db);
+		expect(rows.map((r) => r.raw_gear_id)).toEqual(['b_deleted']);
+	});
+
+	it('excludes shoes (raw gear_id starts with g)', () => {
+		orphanRide(101, 'b_deleted', 10000, 1800, 100);
+		orphanRide(102, 'g_old_shoe', 20000, 3600, 200);
+		const rows = deletedBikeTotals(db);
+		expect(rows.map((r) => r.raw_gear_id)).toEqual(['b_deleted']);
+	});
+
+	it('excludes raw gear_ids that still exist in the gear table', () => {
+		// b1 is still owned. Even if some odd row has gear_id NULL but raw points to b1,
+		// the bike isn't deleted, so don't surface it as a ghost.
+		orphanRide(101, 'b1', 10000, 1800, 100);
+		orphanRide(102, 'b_deleted', 20000, 3600, 200);
+		const rows = deletedBikeTotals(db);
+		expect(rows.map((r) => r.raw_gear_id)).toEqual(['b_deleted']);
 	});
 });
 
