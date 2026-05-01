@@ -34,7 +34,7 @@ export function familyOf(sport: string): SportFamily {
 }
 
 const FRIENDLY: Record<string, string> = {
-	Ride: 'Road',
+	Ride: 'Ride',
 	MountainBikeRide: 'MTB',
 	EMountainBikeRide: 'eMTB',
 	GravelRide: 'Gravel',
@@ -54,6 +54,26 @@ const FRIENDLY: Record<string, string> = {
 
 export function friendlyLabel(sport: string): string {
 	return FRIENDLY[sport] ?? sport;
+}
+
+type ActivityForSport = { sport_type: string; gear_id: string | null };
+type GearForSport = { frame_type: number | null };
+
+// Strava's `sport_type='Ride'` is a generic bucket — pre-2022 activities and any
+// activity not explicitly tagged with a more specific type land here regardless
+// of bike used. Disambiguate via `gear.frame_type` (1=mtb, 2=cross, 3=road,
+// 4=timetrial, 5=gravel) so the dashboard reflects the actual sport.
+export function effectiveSportType(
+	a: ActivityForSport,
+	gearById: Map<string, GearForSport>
+): string {
+	if (a.sport_type !== 'Ride') return a.sport_type;
+	if (!a.gear_id) return 'Ride';
+	const g = gearById.get(a.gear_id);
+	if (!g || g.frame_type == null) return 'Ride';
+	if (g.frame_type === 1) return 'MountainBikeRide';
+	if (g.frame_type === 2 || g.frame_type === 5) return 'GravelRide';
+	return 'Ride';
 }
 
 export const RIDE_FAMILY = Array.from(RIDE_TYPES);
