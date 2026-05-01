@@ -1,8 +1,8 @@
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../db/schema';
 import { athletes, gear, type ActivityInsert } from '../db/schema';
-import { upsertGear } from '../repos/gear';
-import { upsertSummary, applyDetail, activitiesNeedingDetail, maxStartDate } from '../repos/activities';
+import { upsertGear, discoverHistoricalGearIds } from '../repos/gear';
+import { upsertSummary, applyDetail, activitiesNeedingDetail, maxStartDate, relinkOrphanedActivities } from '../repos/activities';
 import { setLastSyncedAt, setFullBackfillAt, getSyncState } from '../repos/sync-state';
 import { StravaClient } from './client';
 import { StravaRateLimitError, type StravaSummaryActivity, type StravaDetailedActivity, type StravaAthlete } from './types';
@@ -72,7 +72,10 @@ function summaryToInsert(a: StravaSummaryActivity, athleteId: number, now: numbe
 }
 
 /** Pulls /athlete, upserts the athlete row, and upserts every bike+shoe in one go. */
-export async function syncGearAndAthlete(client: StravaClient, db: DB): Promise<{ bikes: number; shoes: number }> {
+export async function syncGearAndAthlete(
+	client: StravaClient,
+	db: DB
+): Promise<{ bikes: number; shoes: number; retiredAdded: number; relinked: number }> {
 	const a = (await client.getAthlete()) as StravaAthlete;
 	const now = Math.floor(Date.now() / 1000);
 	const existing = db.select().from(athletes).where(eq(athletes.id, a.id)).all()[0];
@@ -140,7 +143,32 @@ export async function syncGearAndAthlete(client: StravaClient, db: DB): Promise<
 			updated_at: now
 		});
 	}
-	return { bikes: bikes.length, shoes: shoes.length };
+
+	// /athlete omits retired bikes. Recover them from gear_ids referenced by
+	// orphaned activities and fetch each via /gear/{id}. 404 = truly deleted;
+	// skip those (PR #16's ghost cards still cover them).
+	const orphanIds = discoverHistoricalGearIds(db);
+	let retiredAdded = 0;
+	for (const id of orphanIds) {
+		const detail = await client.getGear(id).catch(() => null);
+		if (!detail) continue;
+		upsertGear(db, {
+			id,
+			athlete_id: a.id,
+			kind: 'bike',
+			name: detail.name ?? id,
+			brand: detail.brand_name ?? null,
+			model: detail.model_name ?? null,
+			frame_type: detail.frame_type ?? null,
+			primary_flag: 0,
+			retired: 1,
+			distance_m: detail.distance ?? null,
+			updated_at: now
+		});
+		retiredAdded += 1;
+	}
+	const relinked = relinkOrphanedActivities(db);
+	return { bikes: bikes.length, shoes: shoes.length, retiredAdded, relinked };
 }
 
 /**
