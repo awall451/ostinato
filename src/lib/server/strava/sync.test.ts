@@ -4,9 +4,9 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from '../db/schema';
 import { athletes, gear, activities } from '../db/schema';
-import { syncSummaries } from './sync';
+import { syncSummaries, syncGearAndAthlete } from './sync';
 import type { StravaClient } from './client';
-import type { StravaSummaryActivity } from './types';
+import type { StravaAthlete, StravaSummaryActivity } from './types';
 
 let db: BetterSQLite3Database<typeof schema>;
 
@@ -51,6 +51,42 @@ function fakeClient(rows: StravaSummaryActivity[]): StravaClient {
 		}
 	} as unknown as StravaClient;
 }
+
+describe('syncGearAndAthlete — bike detail enrichment', () => {
+	it('populates frame_type/brand/model from /gear/{id} since /athlete returns SummaryGear only', async () => {
+		const athlete: StravaAthlete = {
+			id: 1,
+			username: 'd',
+			firstname: 'D',
+			lastname: 'H',
+			measurement_preference: 'feet',
+			bikes: [
+				// Strava SummaryGear: id, primary, name, resource_state, distance — no frame_type/brand/model.
+				{ id: 'b_mtb', primary: true, name: 'Ripley', resource_state: 2, distance: 1000 },
+				{ id: 'b_gravel', primary: false, name: 'Stormchaser', resource_state: 2, distance: 500 }
+			],
+			shoes: []
+		};
+		const detailedById: Record<string, { id: string; frame_type: number; brand_name: string; model_name: string }> = {
+			b_mtb: { id: 'b_mtb', frame_type: 1, brand_name: 'Ibis', model_name: 'Ripley AF' },
+			b_gravel: { id: 'b_gravel', frame_type: 5, brand_name: 'All-City', model_name: 'Stormchaser' }
+		};
+		const client = {
+			getAthlete: async () => athlete,
+			getGear: async (id: string) => detailedById[id]
+		} as unknown as StravaClient;
+
+		await syncGearAndAthlete(client, db);
+
+		const rows = db.select().from(gear).all();
+		const byId = new Map(rows.map((r) => [r.id, r]));
+		expect(byId.get('b_mtb')!.frame_type).toBe(1);
+		expect(byId.get('b_mtb')!.brand).toBe('Ibis');
+		expect(byId.get('b_mtb')!.model).toBe('Ripley AF');
+		expect(byId.get('b_gravel')!.frame_type).toBe(5);
+		expect(byId.get('b_gravel')!.brand).toBe('All-City');
+	});
+});
 
 describe('syncSummaries — unknown gear_id handling', () => {
 	it('does not throw when an activity references a gear_id missing from the gear table', async () => {
