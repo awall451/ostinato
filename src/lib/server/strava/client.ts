@@ -8,7 +8,8 @@ import {
 	StravaRateLimitError,
 	type StravaAthlete,
 	type StravaSummaryActivity,
-	type StravaDetailedActivity
+	type StravaDetailedActivity,
+	type StravaGearDetailed
 } from './types';
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -103,5 +104,9 @@ export class StravaClient {
 
 	getActivity(id: number): Promise<StravaDetailedActivity> {
 		return this.request<StravaDetailedActivity>(`/activities/${id}`);
+	}
+
+	getGear(id: string): Promise<StravaGearDetailed> {
+		return this.request<StravaGearDetailed>(`/gear/${id}`);
 	}
 }

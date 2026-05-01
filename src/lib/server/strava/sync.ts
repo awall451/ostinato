@@ -107,18 +107,21 @@ export async function syncGearAndAthlete(client: StravaClient, db: DB): Promise<
 
 	const bikes = a.bikes ?? [];
 	const shoes = a.shoes ?? [];
+	// /athlete returns SummaryGear (no frame_type/brand/model). Hit /gear/{id}
+	// per bike to fill those in. ~one call per bike, single-shot per sync.
 	for (const b of bikes) {
+		const detail = await client.getGear(b.id).catch(() => null);
 		upsertGear(db, {
 			id: b.id,
 			athlete_id: a.id,
 			kind: 'bike',
-			name: b.name,
-			brand: b.brand_name ?? null,
-			model: b.model_name ?? null,
-			frame_type: b.frame_type ?? null,
+			name: detail?.name ?? b.name,
+			brand: detail?.brand_name ?? b.brand_name ?? null,
+			model: detail?.model_name ?? b.model_name ?? null,
+			frame_type: detail?.frame_type ?? b.frame_type ?? null,
 			primary_flag: b.primary ? 1 : 0,
 			retired: b.retired ? 1 : 0,
-			distance_m: b.distance ?? null,
+			distance_m: detail?.distance ?? b.distance ?? null,
 			updated_at: now
 		});
 	}

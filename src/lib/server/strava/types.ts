@@ -38,6 +38,14 @@ export interface StravaGearSummary {
 	description?: string | null;
 }
 
+// /gear/{id} — adds brand/model/frame_type vs SummaryGear.
+export interface StravaGearDetailed extends StravaGearSummary {
+	brand_name?: string | null;
+	model_name?: string | null;
+	frame_type?: number | null;
+	weight?: number | null;
+}
+
 export interface StravaSummaryActivity {
 	id: number;
 	athlete: { id: number };
