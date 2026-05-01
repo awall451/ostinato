@@ -64,6 +64,21 @@ export function totalsByGear(db: DB): GearTotals[] {
 		.map((r) => r as GearTotals);
 }
 
+export type DeletedBikeTotals = {
+	raw_gear_id: string;
+	count: number;
+	distance_m: number;
+	moving_time_s: number;
+	elev_m: number;
+};
+
+// Bikes deleted on Strava: the activity's gear_id FK was nulled by syncSummaries
+// (PR #9), but raw_summary_json preserves the original gear_id. Strava bike ids
+// start with 'b'; shoes start with 'g'.
+export function deletedBikeTotals(_db: DB): DeletedBikeTotals[] {
+	return [];
+}
+
 export function upsertGear(db: DB, row: typeof gear.$inferInsert): void {
 	db.insert(gear)
 		.values(row)
