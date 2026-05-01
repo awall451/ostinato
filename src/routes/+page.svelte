@@ -2,7 +2,7 @@
 	import Donut from '$lib/components/charts/Donut.svelte';
 	import StackedBar from '$lib/components/charts/StackedBar.svelte';
 	import LineArea from '$lib/components/charts/LineArea.svelte';
-	import { friendlyLabel } from '$lib/shared/sport-types';
+	import { friendlyLabel, effectiveSportType } from '$lib/shared/sport-types';
 	import { fmtDistance, fmtDuration, metersToMiles, secondsToHours, type UnitSystem } from '$lib/shared/units';
 	import { bucketKey, type Bucket } from '$lib/shared/time';
 	import { bucketGrid } from '$lib/shared/bucket-grid';
@@ -35,18 +35,23 @@
 	let bucket = $state<Bucket>('month');
 	let selectedSport = $state<string | null>(null);
 
+	const gearById = $derived(new Map<string, Gear>(data.gear.map((g: Gear) => [g.id, g])));
+
 	const filtered = $derived.by(() =>
-		selectedSport ? data.activities.filter((a: Activity) => a.sport_type === selectedSport) : data.activities
+		selectedSport
+			? data.activities.filter((a: Activity) => effectiveSportType(a, gearById) === selectedSport)
+			: data.activities
 	);
 
 	const sportTotals = $derived.by(() => {
 		const m = new Map<string, { count: number; distance_m: number; moving_time_s: number }>();
 		for (const a of data.activities) {
-			const cur = m.get(a.sport_type) ?? { count: 0, distance_m: 0, moving_time_s: 0 };
+			const sport = effectiveSportType(a, gearById);
+			const cur = m.get(sport) ?? { count: 0, distance_m: 0, moving_time_s: 0 };
 			cur.count += 1;
 			cur.distance_m += a.distance_m;
 			cur.moving_time_s += a.moving_time_s;
-			m.set(a.sport_type, cur);
+			m.set(sport, cur);
 		}
 		const list = [...m.entries()].map(([sport, t]) => ({
 			name: friendlyLabel(sport),
@@ -66,7 +71,8 @@
 		const sportSet = new Set<string>();
 		const filled = new Map<string, Map<string, number>>();
 		for (const a of data.activities) {
-			sportSet.add(a.sport_type);
+			const sport = effectiveSportType(a, gearById);
+			sportSet.add(sport);
 			const k = bucketKey(a.start_date, bucket);
 			let row = filled.get(k);
 			if (!row) {
@@ -79,7 +85,7 @@
 					: metric === 'distance'
 						? metersToMiles(a.distance_m)
 						: secondsToHours(a.moving_time_s);
-			row.set(a.sport_type, (row.get(a.sport_type) ?? 0) + v);
+			row.set(sport, (row.get(sport) ?? 0) + v);
 		}
 		const series = [...sportSet].sort();
 		const friendly = series.map(friendlyLabel);
