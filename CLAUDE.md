@@ -8,23 +8,26 @@ ostinato is a personal cycling/running data visualization app for **Dillon** —
 
 The app is **multi-source by design**: Strava is the v1 source; Garmin Connect is on the roadmap. v1 is local-only single-user, but the schema is Postgres-portable so a future public/multi-user step is not a rewrite.
 
-## Current state (last updated 2026-04-30)
+## Current state (last updated 2026-05-01)
 
-**v1 verified end-to-end against real Strava** (1373 activities, 8 gear items synced from the live API in the deployed container). Fixtures path remains for offline dev.
+**v1 verified end-to-end against real Strava** (1373 activities, 21 bikes — 7 active + 13 retired — and 1 shoe synced from the live API in the deployed container). Fixtures path remains for offline dev.
 
 What ships:
 - SvelteKit (Svelte 5 runes) + TypeScript + Drizzle/better-sqlite3.
 - Schema in `src/lib/server/db/schema.ts` (athletes, gear, activities, sync_state). Postgres-portable: epoch-second integers, INTEGER booleans, no SQLite-isms.
-- Strava client in `src/lib/server/strava/client.ts`. Eager token refresh (60s safety margin), rate-limit accounting, 401-retry-then-fail, 429 with `retryAfter`.
+- Strava client in `src/lib/server/strava/client.ts`. Eager token refresh (60s safety margin), rate-limit accounting, 401-retry-then-fail, 429 with `retryAfter`. Endpoints: `getAthlete`, `listActivities`, `getActivity`, `getGear`.
 - OAuth routes: `/auth/connect`, `/auth/callback`, `/auth/disconnect`. CSRF state cookie.
-- Sync flows in `src/lib/server/strava/sync.ts`: `bootstrapSummaries` (full backfill, paged 200/req), `syncIncremental` (cursor on `last_after_epoch`), `enrichDetail(N)` (rate-limit-aware bail), `syncGearAndAthlete` (single `/athlete` call). `syncSummaries` snapshots known gear ids per call and nulls any unknown `gear_id` before insert (PR #9 / issue #8) so historical activities on deleted bikes don't trigger `SQLITE_CONSTRAINT_FOREIGNKEY`.
-- Dashboard `/`: Donut + StackedBar + LineArea, range/metric/bucket toggles. StackedBar uses fixed 800×300 viewBox; bar geometry computed from `computeBarLayout(n, innerWidth)` so aspect ratio stays constant across all range/bucket combinations.
-- Gear `/gear`: bike + shoe cards with SQL aggregation; `/gear/[id]` drill-down with sortable table + month sparkline + Heatmap stub.
+- Sync flows in `src/lib/server/strava/sync.ts`:
+  - `bootstrapSummaries` (full backfill, paged 200/req), `syncIncremental` (cursor on `last_after_epoch`), `enrichDetail(N)` (rate-limit-aware bail).
+  - `syncGearAndAthlete` runs three passes: (1) `/athlete` upsert active bikes/shoes; (2) per-bike `/gear/{id}` enrichment to fill `frame_type`/`brand`/`model` (PR #14) — `/athlete` only returns SummaryGear without those fields; (3) `discoverHistoricalGearIds` finds orphan ids in `raw_summary_json`, fetches `/gear/{id}` for each, upserts as `retired=1` (PR #18) — `/athlete` omits retired bikes entirely. Then `relinkOrphanedActivities` restores `gear_id` on rides whose FK was nulled by PR #9 once the bike row exists. Returns `{bikes, shoes, retiredAdded, relinked}`.
+  - `syncSummaries` snapshots known gear ids per call and nulls any unknown `gear_id` before insert (PR #9 / issue #8) so historical activities on deleted bikes don't trigger `SQLITE_CONSTRAINT_FOREIGNKEY`. Truly-deleted bikes (404 from `/gear/{id}`) stay null and are surfaced as ghost cards (PR #16).
+- Dashboard `/`: Donut + StackedBar + LineArea, range/metric/bucket toggles. StackedBar uses fixed 800×300 viewBox; bar geometry computed from `computeBarLayout(n, innerWidth)` so aspect ratio stays constant across all range/bucket combinations. Sport buckets are derived per-activity via `effectiveSportType(activity, gearById)` (`src/lib/shared/sport-types.ts`, PR #12) — generic `sport_type='Ride'` is routed to `MountainBikeRide`/`GravelRide` based on `gear.frame_type`, so MTB and gravel rides aren't mislabeled as Road.
+- Gear `/gear`: bike + shoe cards with SQL aggregation. `?retired=1` toggle additionally renders a "Retired · no longer on Strava" section sourced from `deletedBikeTotals(db)` (`json_extract(raw_summary_json, '$.gear_id')`) for any 404-deleted bikes that didn't recover via PR #18. `/gear/[id]` drill-down with sortable table + month sparkline + Heatmap stub.
 - Settings `/settings`: connect/disconnect, sync now, backfill, enrich next 25, rate-limit pill, fixture loader.
 - Fixtures: `scripts/seed-fixtures.ts` + `POST /api/seed` (DEV only). 150 synthetic activities, 3 bikes + 1 shoe, 18-month spread, deterministic via mulberry32 seed=42.
 - **Container**: single-image, distroless runtime, auto-migrates on boot. `docker compose up --build` is the canonical run command. See [Container layout](#container-layout).
 - **CI**: GitHub Actions in `.github/workflows/ci.yml`. Three jobs — `node` (test+build, every PR), `docker-build` + `docker-smoke` (paths-gated, weekly cron backstop). Node version pinned in `.nvmrc`.
-- Tests: 28 vitest specs. Server: UPSERT idempotency, gear aggregation NULL semantics, listGear retired/kind filtering, `syncSummaries` unknown-gear nulling. Pure helpers: `bucketGrid` (dense range coverage), `computeBarLayout` (bar-overflow invariant). All pass.
+- Tests: 54 vitest specs. Server: UPSERT idempotency, gear aggregation NULL semantics, listGear retired/kind filtering, `syncSummaries` unknown-gear nulling, `syncGearAndAthlete` bike-detail enrichment + retired-bike discovery + relink, `deletedBikeTotals`, `discoverHistoricalGearIds`, `relinkOrphanedActivities`. Pure helpers: `bucketGrid` (dense range coverage), `computeBarLayout` (bar-overflow invariant), `effectiveSportType` (frame_type-driven sport routing). All pass.
 - Smoke checks pass: `npm run check` (0 err / 0 warn), `npm run build` (clean).
 
 ## Roadmap
@@ -33,6 +36,7 @@ What ships:
 - **Personal heatmap** of activity polylines, filterable by gear/sport. Polyline decoding via `@mapbox/polyline` + Leaflet/MapLibre + OSM tiles. `Heatmap.svelte` already stubbed.
 - **Component testing infra**: add `@testing-library/svelte` + jsdom so Svelte components (StackedBar, Donut, LineArea, Heatmap) get rendered in tests, not just the pure helpers underneath them. Scheduled follow-up agent will open this PR.
 - **Branch protection on `main`**: require the `node` CI job to pass before merge. Turns the gate from advisory to enforced.
+- **Color stability across charts.** Donut and StackedBar both call `pc(i)` indexed by their own input array (donut sorts by value, stacked bar sorts alphabetically), so the same friendly sport gets different colors in each chart. Fix is a `colorForSport(name)` helper in `palette.ts` keyed by friendly name. Discovered while diagnosing the Ride-vs-Road bug; deferred so PR #12 stayed scoped.
 
 ### v2 (next)
 - HR / calorie / suffer-score dashboards.
@@ -172,9 +176,10 @@ Component-level rendering tests (via `@testing-library/svelte` + jsdom) are not 
 
 ## Strava API gotchas (load-bearing)
 - **Refresh eagerly.** Access token TTL is 6 h. The `StravaClient` checks `expires_at - now < 60s` before every call and refreshes inside the same request path.
-- **`sport_type` not `type`.** The legacy `type` field collapses MTB/Gravel/Road into "Ride". Always group by `sport_type`.
-- **Use `/athlete` for gear.** Returns full bike+shoe lists with names and `frame_type`. Avoids per-id `/gear/{id}` rate spend.
-- **`/athlete` only returns currently-owned gear.** Historical activities reference gear_ids the user has since deleted on Strava. Those orphan FKs will abort the entire sync if inserted naively. `syncSummaries` defends against this by snapshotting known gear ids and nulling unknown ones before insert (PR #9). Never re-introduce a code path that inserts an activity with an unverified `gear_id`.
+- **`sport_type` not `type`, but `sport_type='Ride'` is still ambiguous.** Pre-2022 activities and any modern ride not specifically tagged land in the generic `Ride` bucket regardless of bike. Always derive the display sport via `effectiveSportType(activity, gearById)` (`src/lib/shared/sport-types.ts`), which routes `Ride` to MTB/Gravel based on `gear.frame_type`. Never re-introduce a path that maps `Ride → 'Road'` by default — the friendly label for `Ride` is now `'Ride'`, and only frame_type=3 (true road) shows under a road bucket.
+- **`/athlete` returns SummaryGear, not DetailedGear.** No `frame_type`, no `brand_name`, no `model_name`. To populate those, hit `/gear/{id}` per bike (PR #14). Cost is one request per active bike per gear sync — well under the 100-per-15min budget for typical fleets.
+- **`/athlete` omits retired gear entirely.** Retired bikes are still owned and reachable via `/gear/{id}` (200 with full metadata + `retired:true`). `syncGearAndAthlete` discovers retired ids by scanning `raw_summary_json` on orphaned activities (PR #18), fetches each via `/gear/{id}`, upserts with `retired=1`, then runs `relinkOrphanedActivities` to restore `activities.gear_id`. A 404 from `/gear/{id}` means the bike was actually deleted — those stay nulled and surface as ghost cards on `/gear?retired=1` (PR #16).
+- **Historical activities reference gear_ids that may not exist on Strava anymore.** Those orphan FKs will abort the entire sync if inserted naively. `syncSummaries` defends against this by snapshotting known gear ids and nulling unknown ones before insert (PR #9). The original gear_id is preserved in `raw_summary_json` so PR #18's relink pass can graduate them once the retired bike is upserted. Never re-introduce a code path that inserts an activity with an unverified `gear_id`.
 - **Detail endpoint is the rate hog.** `GET /api/v3/activities/{id}` is one call per activity. Never auto-bulk-fetch — gate behind manual button or trickled cron.
 - **Rate limits**: 100 / 15 min and 1000 / day, app-wide (not per-user). Read `X-RateLimit-Usage` and `X-RateLimit-Limit` headers; persist to `sync_state`. Sync loops gate themselves on `used < limit - 5`.
 - **Localhost OAuth redirect** is allowed by Strava without HTTPS. No tunneling needed for dev.
