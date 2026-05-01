@@ -52,6 +52,62 @@ function fakeClient(rows: StravaSummaryActivity[]): StravaClient {
 	} as unknown as StravaClient;
 }
 
+describe('syncGearAndAthlete — retired-bike discovery and relink', () => {
+	it('fetches /gear/{id} for orphan ids in raw_summary_json and relinks activities', async () => {
+		const now = Math.floor(Date.now() / 1000);
+		// Orphan ride: gear_id NULL but raw payload references a bike that /athlete will not return.
+		db.insert(activities)
+			.values({
+				id: 9001,
+				athlete_id: 1,
+				name: 'old',
+				sport_type: 'Ride',
+				start_date: now,
+				start_date_local: now,
+				distance_m: 1000,
+				moving_time_s: 100,
+				elapsed_time_s: 100,
+				total_elevation_gain_m: 0,
+				gear_id: null,
+				raw_summary_json: JSON.stringify({ gear_id: 'b_retired' }),
+				has_heartrate: 0,
+				created_at: now,
+				updated_at: now
+			})
+			.run();
+
+		const athlete: StravaAthlete = {
+			id: 1,
+			username: 'd',
+			firstname: null,
+			lastname: null,
+			measurement_preference: 'feet',
+			bikes: [], // /athlete returns no active bikes
+			shoes: []
+		};
+		const detailedById: Record<string, { id: string; name: string; frame_type: number; brand_name: string; retired: boolean }> = {
+			b_retired: { id: 'b_retired', name: 'Old MTB', frame_type: 1, brand_name: 'Brand', retired: true }
+		};
+		const client = {
+			getAthlete: async () => athlete,
+			getGear: async (id: string) => detailedById[id]
+		} as unknown as StravaClient;
+
+		await syncGearAndAthlete(client, db);
+
+		const gearRows = db.select().from(gear).all();
+		const newBike = gearRows.find((g) => g.id === 'b_retired');
+		expect(newBike).toBeDefined();
+		expect(newBike!.frame_type).toBe(1);
+		expect(newBike!.retired).toBe(1);
+		expect(newBike!.name).toBe('Old MTB');
+
+		const ride = db.select().from(activities).all();
+		const r = ride.find((a) => a.id === 9001)!;
+		expect(r.gear_id).toBe('b_retired');
+	});
+});
+
 describe('syncGearAndAthlete — bike detail enrichment', () => {
 	it('populates frame_type/brand/model from /gear/{id} since /athlete returns SummaryGear only', async () => {
 		const athlete: StravaAthlete = {

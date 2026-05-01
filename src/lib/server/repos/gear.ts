@@ -99,6 +99,13 @@ export function deletedBikeTotals(db: DB): DeletedBikeTotals[] {
 	return rows.filter((r): r is DeletedBikeTotals => r.raw_gear_id !== null);
 }
 
+// Distinct gear_ids referenced by activities whose FK was nulled (PR #9) but
+// that aren't currently in the gear table. Used to drive /gear/{id} fetches
+// for retired-but-not-deleted bikes that /athlete omits.
+export function discoverHistoricalGearIds(_db: DB): string[] {
+	return [];
+}
+
 export function upsertGear(db: DB, row: typeof gear.$inferInsert): void {
 	db.insert(gear)
 		.values(row)

@@ -109,6 +109,14 @@ export function upsertSummary(db: DB, row: ActivityInsert): void {
 		.run();
 }
 
+// Restore gear_id on activities whose FK was nulled by syncSummaries (PR #9)
+// when the original gear_id (preserved in raw_summary_json) now matches a row
+// in the gear table — typically because syncGearAndAthlete just upserted the
+// retired bike. Returns rows updated.
+export function relinkOrphanedActivities(_db: DB): number {
+	return 0;
+}
+
 /** Apply detail-only fields and stamp detail_fetched_at. */
 export function applyDetail(
 	db: DB,

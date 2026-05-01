@@ -5,7 +5,8 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from '../db/schema';
 import { athletes, gear } from '../db/schema';
 import { upsertSummary } from './activities';
-import { totalsByGear, listGear, upsertGear, deletedBikeTotals } from './gear';
+import { totalsByGear, listGear, upsertGear, deletedBikeTotals, discoverHistoricalGearIds } from './gear';
+import { relinkOrphanedActivities } from './activities';
 
 let db: BetterSQLite3Database<typeof schema>;
 
@@ -161,6 +162,114 @@ describe('deletedBikeTotals', () => {
 		orphanRide(102, 'b_deleted', 20000, 3600, 200);
 		const rows = deletedBikeTotals(db);
 		expect(rows.map((r) => r.raw_gear_id)).toEqual(['b_deleted']);
+	});
+});
+
+describe('discoverHistoricalGearIds', () => {
+	function orphan(id: number, rawGearId: string | null) {
+		const now = Math.floor(Date.now() / 1000);
+		upsertSummary(db, {
+			id,
+			athlete_id: 1,
+			name: `r${id}`,
+			sport_type: 'Ride',
+			start_date: now,
+			start_date_local: now,
+			distance_m: 1,
+			moving_time_s: 1,
+			elapsed_time_s: 1,
+			total_elevation_gain_m: 0,
+			gear_id: null,
+			raw_summary_json: JSON.stringify({ gear_id: rawGearId }),
+			average_speed: 1,
+			has_heartrate: 0,
+			created_at: now,
+			updated_at: now
+		});
+	}
+
+	it('returns distinct raw bike ids that are not in the gear table', () => {
+		orphan(1, 'b_old_a');
+		orphan(2, 'b_old_a'); // dedup
+		orphan(3, 'b_old_b');
+		const ids = discoverHistoricalGearIds(db);
+		expect(ids.sort()).toEqual(['b_old_a', 'b_old_b']);
+	});
+
+	it('excludes raw ids that already exist in gear table', () => {
+		orphan(1, 'b1'); // already known
+		orphan(2, 'b_old');
+		expect(discoverHistoricalGearIds(db)).toEqual(['b_old']);
+	});
+
+	it('excludes shoes (g prefix)', () => {
+		orphan(1, 'b_old');
+		orphan(2, 'g_old_shoe');
+		expect(discoverHistoricalGearIds(db)).toEqual(['b_old']);
+	});
+
+	it('excludes activities with null raw gear_id', () => {
+		orphan(1, null);
+		orphan(2, 'b_old');
+		expect(discoverHistoricalGearIds(db)).toEqual(['b_old']);
+	});
+});
+
+describe('relinkOrphanedActivities', () => {
+	function orphan(id: number, rawGearId: string | null) {
+		const now = Math.floor(Date.now() / 1000);
+		upsertSummary(db, {
+			id,
+			athlete_id: 1,
+			name: `r${id}`,
+			sport_type: 'Ride',
+			start_date: now,
+			start_date_local: now,
+			distance_m: 1,
+			moving_time_s: 1,
+			elapsed_time_s: 1,
+			total_elevation_gain_m: 0,
+			gear_id: null,
+			raw_summary_json: rawGearId === undefined ? null : JSON.stringify({ gear_id: rawGearId }),
+			average_speed: 1,
+			has_heartrate: 0,
+			created_at: now,
+			updated_at: now
+		});
+	}
+
+	it('restores gear_id from raw_summary_json when the bike now exists in gear table', () => {
+		orphan(101, 'b1'); // b1 exists in beforeEach
+		orphan(102, 'b_still_missing'); // not in gear table → leave null
+		const updated = relinkOrphanedActivities(db);
+		expect(updated).toBe(1);
+		const rows = db.select().from(schema.activities).all();
+		const byId = new Map(rows.map((r) => [r.id, r]));
+		expect(byId.get(101)!.gear_id).toBe('b1');
+		expect(byId.get(102)!.gear_id).toBeNull();
+	});
+
+	it('does not touch activities whose gear_id is already populated', () => {
+		const now = Math.floor(Date.now() / 1000);
+		upsertSummary(db, {
+			id: 200,
+			athlete_id: 1,
+			name: 'already-linked',
+			sport_type: 'Ride',
+			start_date: now,
+			start_date_local: now,
+			distance_m: 1,
+			moving_time_s: 1,
+			elapsed_time_s: 1,
+			total_elevation_gain_m: 0,
+			gear_id: 'b1',
+			raw_summary_json: JSON.stringify({ gear_id: 'b1' }),
+			average_speed: 1,
+			has_heartrate: 0,
+			created_at: now,
+			updated_at: now
+		});
+		expect(relinkOrphanedActivities(db)).toBe(0);
 	});
 });
 
