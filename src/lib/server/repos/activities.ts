@@ -113,8 +113,17 @@ export function upsertSummary(db: DB, row: ActivityInsert): void {
 // when the original gear_id (preserved in raw_summary_json) now matches a row
 // in the gear table — typically because syncGearAndAthlete just upserted the
 // retired bike. Returns rows updated.
-export function relinkOrphanedActivities(_db: DB): number {
-	return 0;
+export function relinkOrphanedActivities(db: DB): number {
+	const rawGearId = sql`json_extract(${activities.raw_summary_json}, '$.gear_id')`;
+	const result = db.run(sql`
+		UPDATE ${activities}
+		SET gear_id = ${rawGearId}, updated_at = CAST(strftime('%s','now') AS INTEGER)
+		WHERE ${activities.gear_id} IS NULL
+			AND ${activities.raw_summary_json} IS NOT NULL
+			AND ${rawGearId} IS NOT NULL
+			AND ${rawGearId} IN (SELECT id FROM gear)
+	`);
+	return Number(result.changes ?? 0);
 }
 
 /** Apply detail-only fields and stamp detail_fetched_at. */
