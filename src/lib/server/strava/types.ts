@@ -89,6 +89,29 @@ export interface StravaDetailedActivity extends StravaSummaryActivity {
 	description?: string | null;
 }
 
+export type StreamKey =
+	| 'time'
+	| 'distance'
+	| 'latlng'
+	| 'altitude'
+	| 'velocity_smooth'
+	| 'heartrate'
+	| 'cadence'
+	| 'watts'
+	| 'temp'
+	| 'moving'
+	| 'grade_smooth';
+
+export type StreamResolution = 'low' | 'medium' | 'high';
+
+export interface StravaStream {
+	type: StreamKey;
+	data: number[] | [number, number][] | boolean[];
+	series_type: 'distance' | 'time';
+	original_size: number;
+	resolution: StreamResolution;
+}
+
 export class StravaAuthError extends Error {
 	constructor(message: string) {
 		super(message);

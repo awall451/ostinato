@@ -2,10 +2,23 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../db/schema';
 import { athletes, gear, type ActivityInsert } from '../db/schema';
 import { upsertGear, discoverHistoricalGearIds } from '../repos/gear';
-import { upsertSummary, applyDetail, activitiesNeedingDetail, maxStartDate, relinkOrphanedActivities } from '../repos/activities';
+import {
+	upsertSummary,
+	applyDetail,
+	activitiesNeedingDetail,
+	maxStartDate,
+	relinkOrphanedActivities,
+	upsertActivityStream
+} from '../repos/activities';
 import { setLastSyncedAt, setFullBackfillAt, getSyncState } from '../repos/sync-state';
 import { StravaClient } from './client';
-import { StravaRateLimitError, type StravaSummaryActivity, type StravaDetailedActivity, type StravaAthlete } from './types';
+import {
+	StravaRateLimitError,
+	type StravaSummaryActivity,
+	type StravaDetailedActivity,
+	type StravaAthlete,
+	type StreamKey
+} from './types';
 import { eq } from 'drizzle-orm';
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -233,6 +246,53 @@ export async function syncIncremental(client: StravaClient, db: DB, athleteId: n
 	const now = Math.floor(Date.now() / 1000);
 	setLastSyncedAt(db, now, r.maxStartDate ?? after);
 	return r;
+}
+
+export const STREAM_KEYS: StreamKey[] = [
+	'time',
+	'distance',
+	'latlng',
+	'altitude',
+	'velocity_smooth',
+	'heartrate',
+	'cadence',
+	'watts',
+	'temp',
+	'moving',
+	'grade_smooth'
+];
+
+/**
+ * Fetch every available stream type for one activity and upsert one row per
+ * type into `activity_streams`. Returns false if the activity is unknown
+ * locally; Strava omits keys it doesn't have data for, so `types` may be
+ * smaller than STREAM_KEYS.length.
+ */
+export async function enrichStreams(
+	client: StravaClient,
+	db: DB,
+	id: number
+): Promise<{ enriched: boolean; types: number }> {
+	const exists = db.select().from(schema.activities).where(eq(schema.activities.id, id)).all()[0];
+	if (!exists) return { enriched: false, types: 0 };
+	const streams = await client.getStreams(id, STREAM_KEYS);
+	const now = Math.floor(Date.now() / 1000);
+	let types = 0;
+	for (const [type, s] of Object.entries(streams)) {
+		if (!s || typeof s !== 'object') continue;
+		const stream = s as { data?: unknown; resolution?: string; original_size?: number };
+		if (stream.data === undefined) continue;
+		upsertActivityStream(db, {
+			activity_id: id,
+			type,
+			data_json: JSON.stringify(stream.data),
+			resolution: stream.resolution ?? 'high',
+			original_size: stream.original_size ?? (Array.isArray(stream.data) ? stream.data.length : 0),
+			fetched_at: now
+		});
+		types++;
+	}
+	return { enriched: true, types };
 }
 
 /**
