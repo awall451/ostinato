@@ -5,7 +5,13 @@ import { upsertGear, discoverHistoricalGearIds } from '../repos/gear';
 import { upsertSummary, applyDetail, activitiesNeedingDetail, maxStartDate, relinkOrphanedActivities } from '../repos/activities';
 import { setLastSyncedAt, setFullBackfillAt, getSyncState } from '../repos/sync-state';
 import { StravaClient } from './client';
-import { StravaRateLimitError, type StravaSummaryActivity, type StravaDetailedActivity, type StravaAthlete } from './types';
+import {
+	StravaRateLimitError,
+	type StravaSummaryActivity,
+	type StravaDetailedActivity,
+	type StravaAthlete,
+	type StreamKey
+} from './types';
 import { eq } from 'drizzle-orm';
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -233,6 +239,35 @@ export async function syncIncremental(client: StravaClient, db: DB, athleteId: n
 	const now = Math.floor(Date.now() / 1000);
 	setLastSyncedAt(db, now, r.maxStartDate ?? after);
 	return r;
+}
+
+export const STREAM_KEYS: StreamKey[] = [
+	'time',
+	'distance',
+	'latlng',
+	'altitude',
+	'velocity_smooth',
+	'heartrate',
+	'cadence',
+	'watts',
+	'temp',
+	'moving',
+	'grade_smooth'
+];
+
+/**
+ * Fetch every available stream type for one activity and upsert one row per
+ * type into `activity_streams`. Returns false if the activity is unknown
+ * locally; Strava omits keys it doesn't have data for, so `types` may be
+ * smaller than STREAM_KEYS.length.
+ */
+export async function enrichStreams(
+	_client: StravaClient,
+	_db: DB,
+	_id: number
+): Promise<{ enriched: boolean; types: number }> {
+	// stub — implemented in green commit
+	return { enriched: false, types: 0 };
 }
 
 /**

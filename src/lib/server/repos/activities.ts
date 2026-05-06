@@ -1,7 +1,9 @@
 import { sql, and, gte, lte, inArray, desc, eq } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { activities, type ActivityInsert, type Activity } from '../db/schema';
+import { activities, activity_streams, type ActivityInsert, type Activity } from '../db/schema';
 import * as schema from '../db/schema';
+
+export type StreamRecord = Record<string, number[] | [number, number][] | boolean[]>;
 
 type DB = BetterSQLite3Database<typeof schema>;
 
@@ -29,6 +31,33 @@ export function listActivitiesInRange(
 export function getActivityById(db: DB, id: number): Activity | null {
 	const r = db.select().from(activities).where(eq(activities.id, id)).all();
 	return r[0] ?? null;
+}
+
+/**
+ * Decoded streams keyed by type, e.g. { heartrate: [...], watts: [...] }.
+ * Stub returns {} until green commit.
+ */
+export function getStreamsForActivity(_db: DB, _activityId: number): StreamRecord {
+	return {};
+}
+
+/** Upsert one stream row by `(activity_id, type)`. */
+export function upsertActivityStream(
+	db: DB,
+	row: typeof activity_streams.$inferInsert
+): void {
+	db.insert(activity_streams)
+		.values(row)
+		.onConflictDoUpdate({
+			target: [activity_streams.activity_id, activity_streams.type],
+			set: {
+				data_json: row.data_json,
+				resolution: row.resolution,
+				original_size: row.original_size,
+				fetched_at: row.fetched_at
+			}
+		})
+		.run();
 }
 
 export function listActivitiesForGear(db: DB, gearId: string, limit = 200): Activity[] {

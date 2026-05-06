@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from '../db/schema';
 import { athletes, gear, activities } from '../db/schema';
-import { syncSummaries, syncGearAndAthlete, enrichOne } from './sync';
+import { syncSummaries, syncGearAndAthlete, enrichOne, enrichStreams } from './sync';
 import type { StravaClient } from './client';
 import type { StravaAthlete, StravaSummaryActivity } from './types';
 
@@ -168,6 +168,96 @@ describe('syncSummaries — unknown gear_id handling', () => {
 		expect(byId.get(100)!.gear_id).toBe('b_known');
 		expect(byId.get(101)!.gear_id).toBeNull();
 		expect(byId.get(102)!.gear_id).toBeNull();
+	});
+});
+
+describe('enrichStreams', () => {
+	function fakeStreamsClient(streams: Record<string, unknown>): StravaClient {
+		return {
+			getStreams: async () => streams
+		} as unknown as StravaClient;
+	}
+
+	it('returns { enriched: false, types: 0 } when activity not in DB', async () => {
+		const client = fakeStreamsClient({});
+		const r = await enrichStreams(client, db, 999999);
+		expect(r.enriched).toBe(false);
+		expect(r.types).toBe(0);
+	});
+
+	it('upserts one row per stream type', async () => {
+		const now = Math.floor(Date.now() / 1000);
+		db.insert(activities)
+			.values({
+				id: 444,
+				athlete_id: 1,
+				name: 'r',
+				sport_type: 'Ride',
+				start_date: now,
+				start_date_local: now,
+				distance_m: 1000,
+				moving_time_s: 100,
+				elapsed_time_s: 100,
+				total_elevation_gain_m: 0,
+				has_heartrate: 0,
+				created_at: now,
+				updated_at: now
+			})
+			.run();
+
+		const client = fakeStreamsClient({
+			heartrate: { type: 'heartrate', data: [140, 145, 150], series_type: 'distance', original_size: 3, resolution: 'high' },
+			watts: { type: 'watts', data: [200, 210, 220], series_type: 'distance', original_size: 3, resolution: 'high' },
+			distance: { type: 'distance', data: [0, 100, 200], series_type: 'distance', original_size: 3, resolution: 'high' },
+			latlng: { type: 'latlng', data: [[40.0, -105.0], [40.001, -105.001], [40.002, -105.002]], series_type: 'distance', original_size: 3, resolution: 'high' }
+		});
+
+		const r = await enrichStreams(client, db, 444);
+		expect(r.enriched).toBe(true);
+		expect(r.types).toBe(4);
+
+		const rows = db.select().from(schema.activity_streams).all();
+		expect(rows).toHaveLength(4);
+		const byType = new Map(rows.map((row) => [row.type, row]));
+		expect(byType.get('heartrate')!.original_size).toBe(3);
+		expect(JSON.parse(byType.get('latlng')!.data_json)).toEqual([
+			[40.0, -105.0],
+			[40.001, -105.001],
+			[40.002, -105.002]
+		]);
+	});
+
+	it('replaces existing rows when called again (upsert by composite key)', async () => {
+		const now = Math.floor(Date.now() / 1000);
+		db.insert(activities)
+			.values({
+				id: 445,
+				athlete_id: 1,
+				name: 'r',
+				sport_type: 'Ride',
+				start_date: now,
+				start_date_local: now,
+				distance_m: 1000,
+				moving_time_s: 100,
+				elapsed_time_s: 100,
+				total_elevation_gain_m: 0,
+				has_heartrate: 0,
+				created_at: now,
+				updated_at: now
+			})
+			.run();
+		const stream1 = fakeStreamsClient({
+			heartrate: { type: 'heartrate', data: [140, 145], series_type: 'distance', original_size: 2, resolution: 'high' }
+		});
+		const stream2 = fakeStreamsClient({
+			heartrate: { type: 'heartrate', data: [200, 210, 220], series_type: 'distance', original_size: 3, resolution: 'high' }
+		});
+		await enrichStreams(stream1, db, 445);
+		await enrichStreams(stream2, db, 445);
+		const rows = db.select().from(schema.activity_streams).all();
+		expect(rows).toHaveLength(1);
+		expect(JSON.parse(rows[0].data_json)).toEqual([200, 210, 220]);
+		expect(rows[0].original_size).toBe(3);
 	});
 });
 

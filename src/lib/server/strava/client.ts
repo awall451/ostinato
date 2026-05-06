@@ -9,7 +9,10 @@ import {
 	type StravaAthlete,
 	type StravaSummaryActivity,
 	type StravaDetailedActivity,
-	type StravaGearDetailed
+	type StravaGearDetailed,
+	type StravaStream,
+	type StreamKey,
+	type StreamResolution
 } from './types';
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -108,5 +111,19 @@ export class StravaClient {
 
 	getGear(id: string): Promise<StravaGearDetailed> {
 		return this.request<StravaGearDetailed>(`/gear/${id}`);
+	}
+
+	getStreams(
+		id: number,
+		keys: StreamKey[],
+		resolution: StreamResolution = 'high'
+	): Promise<Record<StreamKey, StravaStream>> {
+		const p = new URLSearchParams();
+		p.set('keys', keys.join(','));
+		p.set('key_by_type', 'true');
+		p.set('resolution', resolution);
+		return this.request<Record<StreamKey, StravaStream>>(
+			`/activities/${id}/streams?${p.toString()}`
+		);
 	}
 }

@@ -1,4 +1,4 @@
-import { sqliteTable, integer, real, text, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, integer, real, text, index, primaryKey } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 /**
@@ -103,6 +103,24 @@ export const activities = sqliteTable(
 	]
 );
 
+export const activity_streams = sqliteTable(
+	'activity_streams',
+	{
+		activity_id: integer('activity_id')
+			.notNull()
+			.references(() => activities.id, { onDelete: 'cascade' }),
+		type: text('type').notNull(), // 'time' | 'distance' | 'latlng' | 'altitude' | 'velocity_smooth' | 'heartrate' | 'cadence' | 'watts' | 'temp' | 'moving' | 'grade_smooth'
+		data_json: text('data_json').notNull(),
+		resolution: text('resolution').notNull(), // 'low' | 'medium' | 'high'
+		original_size: integer('original_size').notNull(),
+		fetched_at: integer('fetched_at').notNull()
+	},
+	(t) => [
+		primaryKey({ columns: [t.activity_id, t.type] }),
+		index('idx_streams_activity').on(t.activity_id)
+	]
+);
+
 export const sync_state = sqliteTable('sync_state', {
 	id: integer('id').primaryKey(), // always 1; single-row table
 	last_after_epoch: integer('last_after_epoch'),
@@ -122,3 +140,5 @@ export type Gear = typeof gear.$inferSelect;
 export type Activity = typeof activities.$inferSelect;
 export type ActivityInsert = typeof activities.$inferInsert;
 export type SyncState = typeof sync_state.$inferSelect;
+export type ActivityStream = typeof activity_streams.$inferSelect;
+export type ActivityStreamInsert = typeof activity_streams.$inferInsert;
