@@ -236,6 +236,22 @@ export async function syncIncremental(client: StravaClient, db: DB, athleteId: n
 }
 
 /**
+ * Fetch DetailedActivity for one specific activity by id. Used by the
+ * `/api/activities/{id}/enrich` endpoint so the detail page can pull a
+ * single ride without detouring to Settings. Returns false if the activity
+ * is unknown locally; throws StravaRateLimitError / StravaAuthError on API
+ * trouble (handler maps to 429 / 401).
+ */
+export async function enrichOne(
+	_client: StravaClient,
+	_db: DB,
+	_id: number
+): Promise<{ enriched: boolean }> {
+	// stub — implemented in green commit
+	return { enriched: false };
+}
+
+/**
  * Fetch DetailedActivity for the next `limit` activities lacking detail. Bails on rate-limit.
  */
 export async function enrichDetail(client: StravaClient, db: DB, limit: number): Promise<EnrichResult> {
