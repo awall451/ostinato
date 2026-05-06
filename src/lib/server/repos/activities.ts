@@ -33,12 +33,22 @@ export function getActivityById(db: DB, id: number): Activity | null {
 	return r[0] ?? null;
 }
 
-/**
- * Decoded streams keyed by type, e.g. { heartrate: [...], watts: [...] }.
- * Stub returns {} until green commit.
- */
-export function getStreamsForActivity(_db: DB, _activityId: number): StreamRecord {
-	return {};
+/** Decoded streams keyed by type, e.g. { heartrate: [...], watts: [...] }. */
+export function getStreamsForActivity(db: DB, activityId: number): StreamRecord {
+	const rows = db
+		.select()
+		.from(activity_streams)
+		.where(eq(activity_streams.activity_id, activityId))
+		.all();
+	const out: StreamRecord = {};
+	for (const r of rows) {
+		try {
+			out[r.type] = JSON.parse(r.data_json);
+		} catch {
+			// Skip malformed rows rather than 500 the whole page.
+		}
+	}
+	return out;
 }
 
 /** Upsert one stream row by `(activity_id, type)`. */

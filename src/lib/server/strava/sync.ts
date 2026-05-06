@@ -2,7 +2,14 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../db/schema';
 import { athletes, gear, type ActivityInsert } from '../db/schema';
 import { upsertGear, discoverHistoricalGearIds } from '../repos/gear';
-import { upsertSummary, applyDetail, activitiesNeedingDetail, maxStartDate, relinkOrphanedActivities } from '../repos/activities';
+import {
+	upsertSummary,
+	applyDetail,
+	activitiesNeedingDetail,
+	maxStartDate,
+	relinkOrphanedActivities,
+	upsertActivityStream
+} from '../repos/activities';
 import { setLastSyncedAt, setFullBackfillAt, getSyncState } from '../repos/sync-state';
 import { StravaClient } from './client';
 import {
@@ -262,12 +269,30 @@ export const STREAM_KEYS: StreamKey[] = [
  * smaller than STREAM_KEYS.length.
  */
 export async function enrichStreams(
-	_client: StravaClient,
-	_db: DB,
-	_id: number
+	client: StravaClient,
+	db: DB,
+	id: number
 ): Promise<{ enriched: boolean; types: number }> {
-	// stub — implemented in green commit
-	return { enriched: false, types: 0 };
+	const exists = db.select().from(schema.activities).where(eq(schema.activities.id, id)).all()[0];
+	if (!exists) return { enriched: false, types: 0 };
+	const streams = await client.getStreams(id, STREAM_KEYS);
+	const now = Math.floor(Date.now() / 1000);
+	let types = 0;
+	for (const [type, s] of Object.entries(streams)) {
+		if (!s || typeof s !== 'object') continue;
+		const stream = s as { data?: unknown; resolution?: string; original_size?: number };
+		if (stream.data === undefined) continue;
+		upsertActivityStream(db, {
+			activity_id: id,
+			type,
+			data_json: JSON.stringify(stream.data),
+			resolution: stream.resolution ?? 'high',
+			original_size: stream.original_size ?? (Array.isArray(stream.data) ? stream.data.length : 0),
+			fetched_at: now
+		});
+		types++;
+	}
+	return { enriched: true, types };
 }
 
 /**

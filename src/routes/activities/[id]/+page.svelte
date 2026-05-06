@@ -1,12 +1,18 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import RouteMap from '$lib/components/charts/RouteMap.svelte';
+	import StreamChart from '$lib/components/charts/StreamChart.svelte';
 	import { friendlyLabel, effectiveSportType } from '$lib/shared/sport-types';
 	import {
 		fmtDistance,
 		fmtDuration,
 		fmtElevation,
 		fmtSpeed,
+		metersToMiles,
+		metersToKm,
+		metersToFeet,
+		mpsToMph,
+		mpsToKmh,
 		type UnitSystem
 	} from '$lib/shared/units';
 	import type { Activity, Gear } from '$lib/server/db/schema';
@@ -20,6 +26,8 @@
 			description: string | null;
 			splits: SplitRow[];
 			segments: SegmentEffortRow[];
+			streams: Record<string, number[] | [number, number][] | boolean[]>;
+			hasStreams: boolean;
 		};
 	}>();
 
@@ -60,22 +68,50 @@
 	let busy = $state<string | null>(null);
 	let error = $state<string>('');
 
-	async function enrichDetail() {
-		busy = 'enrich';
+	async function callPost(path: string, label: string) {
+		busy = label;
 		error = '';
 		try {
-			const r = await fetch(`/api/activities/${a.id}/enrich`, { method: 'POST' });
+			const r = await fetch(path, { method: 'POST' });
 			if (!r.ok) {
-				error = `enrich failed: ${r.status} ${await r.text()}`;
+				error = `${label} failed: ${r.status} ${await r.text()}`;
 				return;
 			}
 			await invalidateAll();
 		} catch (e) {
-			error = `enrich threw: ${(e as Error).message}`;
+			error = `${label} threw: ${(e as Error).message}`;
 		} finally {
 			busy = null;
 		}
 	}
+
+	const distanceSeries = $derived.by(() => {
+		const d = data.streams.distance;
+		if (!Array.isArray(d) || d.length === 0) return [] as number[];
+		return (d as number[]).map((m) => (units === 'imperial' ? metersToMiles(m) : metersToKm(m)));
+	});
+
+	function asNumberSeries(key: string): number[] {
+		const s = data.streams[key];
+		return Array.isArray(s) && typeof s[0] === 'number' ? (s as number[]) : [];
+	}
+
+	const heartrate = $derived(asNumberSeries('heartrate'));
+	const watts = $derived(asNumberSeries('watts'));
+	const cadence = $derived(asNumberSeries('cadence'));
+	const altitudeRaw = $derived(asNumberSeries('altitude'));
+	const speedRaw = $derived(asNumberSeries('velocity_smooth'));
+
+	const altitude = $derived.by(() =>
+		altitudeRaw.map((m) => (units === 'imperial' ? metersToFeet(m) : m))
+	);
+	const speed = $derived.by(() =>
+		speedRaw.map((mps) => (units === 'imperial' ? mpsToMph(mps) : mpsToKmh(mps)))
+	);
+
+	const xLabel = $derived(units === 'imperial' ? ' mi' : ' km');
+	const elevUnit = $derived(units === 'imperial' ? ' ft' : ' m');
+	const speedUnit = $derived(units === 'imperial' ? ' mph' : ' km/h');
 </script>
 
 <svelte:head>
@@ -193,20 +229,90 @@
 {/if}
 
 <div class="card actions">
-	<button onclick={enrichDetail} disabled={a.detail_fetched_at != null || busy !== null}>
+	<button
+		onclick={() => callPost(`/api/activities/${a.id}/enrich`, 'enrich')}
+		disabled={a.detail_fetched_at != null || busy !== null}
+	>
 		{a.detail_fetched_at != null
 			? 'Detail enriched ✓'
 			: busy === 'enrich'
 				? 'Enriching…'
 				: 'Enrich detail'}
 	</button>
+	<button
+		onclick={() => callPost(`/api/activities/${a.id}/streams`, 'streams')}
+		disabled={data.hasStreams || busy !== null}
+	>
+		{data.hasStreams
+			? 'Streams pulled ✓'
+			: busy === 'streams'
+				? 'Pulling streams…'
+				: 'Pull streams'}
+	</button>
 	<span class="muted small">
-		Pulls description, calories, splits, and segment efforts (1 Strava API call).
+		Each button consumes 1 Strava API call.
 	</span>
 	{#if error}
 		<div class="banner err">{error}</div>
 	{/if}
 </div>
+
+{#if data.hasStreams && distanceSeries.length > 0}
+	<div class="card streams">
+		<h2>Time series</h2>
+		{#if heartrate.length > 0}
+			<StreamChart
+				xs={distanceSeries}
+				ys={heartrate}
+				title="Heart rate"
+				yLabel=" bpm"
+				xLabel={xLabel}
+				color="#ef4444"
+			/>
+		{/if}
+		{#if watts.length > 0}
+			<StreamChart
+				xs={distanceSeries}
+				ys={watts}
+				title="Power"
+				yLabel=" W"
+				xLabel={xLabel}
+				color="#f59e0b"
+			/>
+		{/if}
+		{#if cadence.length > 0}
+			<StreamChart
+				xs={distanceSeries}
+				ys={cadence}
+				title="Cadence"
+				yLabel=" rpm"
+				xLabel={xLabel}
+				color="#a78bfa"
+			/>
+		{/if}
+		{#if speed.length > 0}
+			<StreamChart
+				xs={distanceSeries}
+				ys={speed}
+				title="Speed"
+				yLabel={speedUnit}
+				xLabel={xLabel}
+				formatY={(v) => v.toFixed(1)}
+				color="#22c55e"
+			/>
+		{/if}
+		{#if altitude.length > 0}
+			<StreamChart
+				xs={distanceSeries}
+				ys={altitude}
+				title="Elevation"
+				yLabel={elevUnit}
+				xLabel={xLabel}
+				color="#5b9bd5"
+			/>
+		{/if}
+	</div>
+{/if}
 
 {#if data.splits.length > 0}
 	<div class="card">

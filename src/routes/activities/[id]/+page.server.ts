@@ -1,6 +1,6 @@
 import type { PageServerLoad } from './$types';
 import { error } from '@sveltejs/kit';
-import { getActivityById } from '$lib/server/repos/activities';
+import { getActivityById, getStreamsForActivity } from '$lib/server/repos/activities';
 import { getGearById } from '$lib/server/repos/gear';
 import { athletes } from '$lib/server/db/schema';
 import { parseDescription, parseSplits, parseSegmentEfforts } from '$lib/shared/activity-detail';
@@ -30,5 +30,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}
 	}
 
-	return { activity, gear, measurement, description, splits, segments };
+	const streams = getStreamsForActivity(locals.db, activity.id);
+	const hasStreams = Object.keys(streams).length > 0;
+
+	return { activity, gear, measurement, description, splits, segments, streams, hasStreams };
 };
