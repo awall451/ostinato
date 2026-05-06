@@ -189,9 +189,10 @@ async function snap(args) {
 			file: 'gear-detail.png',
 			wait: 'svg',
 			settle: 800,
-			// 179-row activity table makes fullPage huge; bump viewport then clip
-			viewport: { width: 1440, height: 1800 },
-			clip: { x: 0, y: 0, width: 1440, height: 1800 }
+			// stats + monthly + full 2x2 chart grid (cumulative/sport-mix/weekday/length);
+			// 179-row activity table below would make fullPage huge
+			viewport: { width: 1440, height: 2400 },
+			clip: { x: 0, y: 0, width: 1440, height: 2400 }
 		},
 		{
 			url: `/activities/${activityId}`,
