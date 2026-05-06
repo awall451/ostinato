@@ -103,10 +103,10 @@ export function parseSegmentEfforts(detail: Detail): SegmentEffortRow[] {
 		if (!e) continue;
 		const seg = asObj(e.segment);
 		const segId = asNum(seg?.id);
-		if (segId == null) continue;
+		const effortId = asNum(e.id);
+		if (segId == null || effortId == null) continue;
 		rows.push({
-			// stub for issue #31; green commit populates from e.id and skips when missing
-			effort_id: 0,
+			effort_id: effortId,
 			segment_id: segId,
 			segment_name: asStr(seg?.name) ?? `segment ${segId}`,
 			distance_m: asNum(e.distance) ?? 0,

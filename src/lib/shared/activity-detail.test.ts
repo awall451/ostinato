@@ -70,6 +70,7 @@ describe('parseSegmentEfforts', () => {
 	const sampleDetail = {
 		segment_efforts: [
 			{
+				id: 1001,
 				segment: { id: 12345, name: 'Big Climb' },
 				distance: 850,
 				moving_time: 240,
@@ -80,6 +81,7 @@ describe('parseSegmentEfforts', () => {
 				pr_rank: 1
 			},
 			{
+				id: 1002,
 				segment: { id: 67890, name: 'Sprint Section' },
 				distance: 200,
 				moving_time: 18,
@@ -101,6 +103,7 @@ describe('parseSegmentEfforts', () => {
 		const rows = parseSegmentEfforts(sampleDetail);
 		expect(rows).toHaveLength(2);
 		expect(rows[0]).toEqual({
+			effort_id: 1001,
 			segment_id: 12345,
 			segment_name: 'Big Climb',
 			distance_m: 850,
