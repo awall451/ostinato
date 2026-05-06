@@ -4,7 +4,7 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from '../db/schema';
 import { athletes, gear, activities } from '../db/schema';
-import { upsertSummary, applyDetail, countActivities, activitiesNeedingDetail } from './activities';
+import { upsertSummary, applyDetail, countActivities, activitiesNeedingDetail, getActivityById } from './activities';
 
 let db: BetterSQLite3Database<typeof schema>;
 
@@ -75,6 +75,18 @@ describe('upsertSummary', () => {
 		expect(row.detail_fetched_at).toBe(now); // detail timestamp preserved
 		expect(row.calories).toBe(500); // detail field preserved
 		expect(row.suffer_score).toBe(42);
+	});
+
+	it('getActivityById returns the row when present', () => {
+		upsertSummary(db, summary(100, { name: 'specific ride' }));
+		const got = getActivityById(db, 100);
+		expect(got).not.toBeNull();
+		expect(got?.id).toBe(100);
+		expect(got?.name).toBe('specific ride');
+	});
+
+	it('getActivityById returns null when missing', () => {
+		expect(getActivityById(db, 999)).toBeNull();
 	});
 
 	it('activitiesNeedingDetail picks only summary-only rows', () => {

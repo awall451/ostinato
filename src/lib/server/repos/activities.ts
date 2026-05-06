@@ -26,6 +26,11 @@ export function listActivitiesInRange(
 	return rows;
 }
 
+export function getActivityById(_db: DB, _id: number): Activity | null {
+	// stub — implemented in green commit
+	return null;
+}
+
 export function listActivitiesForGear(db: DB, gearId: string, limit = 200): Activity[] {
 	return db
 		.select()
