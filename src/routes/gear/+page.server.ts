@@ -12,17 +12,23 @@ export type GearWithTotals = Gear & { totals: GearTotals | null };
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const includeRetired = url.searchParams.get('retired') === '1';
-	const allGear = listGear(locals.db, { includeRetired });
+	// Bikes: always include retired so client-side color map keyed by sorted-id
+	// position stays stable when the retired toggle flips. Visibility is decided
+	// client-side via includeRetired.
+	const allBikesRaw = listGear(locals.db, { includeRetired: true, kind: 'bike' });
+	const shoesRaw = listGear(locals.db, { includeRetired, kind: 'shoe' });
 	const totalsRows = totalsByGear(locals.db);
-	const totalsByid = new Map(totalsRows.map((t) => [t.gear_id, t]));
+	const totalsById = new Map(totalsRows.map((t) => [t.gear_id, t]));
 
-	const enriched: GearWithTotals[] = allGear.map((g) => ({
+	const allBikes: GearWithTotals[] = allBikesRaw.map((g) => ({
 		...g,
-		totals: totalsByid.get(g.id) ?? null
+		totals: totalsById.get(g.id) ?? null
+	}));
+	const shoes: GearWithTotals[] = shoesRaw.map((g) => ({
+		...g,
+		totals: totalsById.get(g.id) ?? null
 	}));
 
-	const bikes = enriched.filter((g) => g.kind === 'bike');
-	const shoes = enriched.filter((g) => g.kind === 'shoe');
 	const deletedBikes: DeletedBikeTotals[] = includeRetired ? deletedBikeTotals(locals.db) : [];
-	return { bikes, shoes, deletedBikes, includeRetired };
+	return { allBikes, shoes, deletedBikes, includeRetired };
 };
