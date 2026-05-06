@@ -243,12 +243,29 @@ export async function syncIncremental(client: StravaClient, db: DB, athleteId: n
  * trouble (handler maps to 429 / 401).
  */
 export async function enrichOne(
-	_client: StravaClient,
-	_db: DB,
-	_id: number
+	client: StravaClient,
+	db: DB,
+	id: number
 ): Promise<{ enriched: boolean }> {
-	// stub — implemented in green commit
-	return { enriched: false };
+	const exists = db.select().from(schema.activities).where(eq(schema.activities.id, id)).all()[0];
+	if (!exists) return { enriched: false };
+	const detail = (await client.getActivity(id)) as StravaDetailedActivity;
+	const now = Math.floor(Date.now() / 1000);
+	applyDetail(
+		db,
+		id,
+		{
+			calories: detail.calories ?? null,
+			device_watts: detail.device_watts ? 1 : 0,
+			max_watts: detail.max_watts ?? null,
+			weighted_average_watts: detail.weighted_average_watts ?? null,
+			kilojoules: detail.kilojoules ?? null,
+			suffer_score: detail.suffer_score ?? null,
+			raw_detail_json: JSON.stringify(detail)
+		},
+		now
+	);
+	return { enriched: true };
 }
 
 /**

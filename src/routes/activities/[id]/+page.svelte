@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { invalidateAll } from '$app/navigation';
 	import RouteMap from '$lib/components/charts/RouteMap.svelte';
 	import { friendlyLabel, effectiveSportType } from '$lib/shared/sport-types';
 	import {
@@ -9,10 +10,20 @@
 		type UnitSystem
 	} from '$lib/shared/units';
 	import type { Activity, Gear } from '$lib/server/db/schema';
+	import type { SplitRow, SegmentEffortRow } from '$lib/shared/activity-detail';
 
-	let { data } = $props<{ data: { activity: Activity; gear: Gear | null } }>();
+	let { data } = $props<{
+		data: {
+			activity: Activity;
+			gear: Gear | null;
+			measurement: UnitSystem;
+			description: string | null;
+			splits: SplitRow[];
+			segments: SegmentEffortRow[];
+		};
+	}>();
 
-	const units: UnitSystem = 'imperial';
+	const units: UnitSystem = $derived(data.measurement);
 
 	const a = $derived(data.activity);
 	const g = $derived(data.gear);
@@ -34,9 +45,37 @@
 		return n != null ? `${Math.round(n)}${suffix}` : '—';
 	}
 
+	function fmtPace(secondsPerUnit: number, unit: 'mi' | 'km'): string {
+		if (!Number.isFinite(secondsPerUnit) || secondsPerUnit <= 0) return '—';
+		const m = Math.floor(secondsPerUnit / 60);
+		const s = Math.round(secondsPerUnit % 60);
+		return `${m}:${s.toString().padStart(2, '0')} /${unit}`;
+	}
+
 	const backHref = $derived(g ? `/gear/${g.id}` : '/');
 	const backLabel = $derived(g ? `← ${g.name}` : '← Dashboard');
 	const stravaUrl = $derived(`https://www.strava.com/activities/${a.id}`);
+	const paceUnit = $derived(units === 'imperial' ? 'mi' : 'km');
+
+	let busy = $state<string | null>(null);
+	let error = $state<string>('');
+
+	async function enrichDetail() {
+		busy = 'enrich';
+		error = '';
+		try {
+			const r = await fetch(`/api/activities/${a.id}/enrich`, { method: 'POST' });
+			if (!r.ok) {
+				error = `enrich failed: ${r.status} ${await r.text()}`;
+				return;
+			}
+			await invalidateAll();
+		} catch (e) {
+			error = `enrich threw: ${(e as Error).message}`;
+		} finally {
+			busy = null;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -59,6 +98,13 @@
 		<a href={stravaUrl} target="_blank" rel="noopener noreferrer">View on Strava ↗</a>
 	</div>
 </div>
+
+{#if data.description}
+	<div class="card desc">
+		<h2>Description</h2>
+		<p>{data.description}</p>
+	</div>
+{/if}
 
 <div class="totals">
 	<div class="card t">
@@ -146,10 +192,89 @@
 	</div>
 {/if}
 
-{#if !a.detail_fetched_at}
-	<div class="card hint muted">
-		Detail not yet enriched. Click <a href="/settings">Enrich next 25</a> on Settings to pull
-		calories, description, splits, and segment efforts for recent rides. Per-activity enrich + streams coming in follow-ups.
+<div class="card actions">
+	<button onclick={enrichDetail} disabled={a.detail_fetched_at != null || busy !== null}>
+		{a.detail_fetched_at != null
+			? 'Detail enriched ✓'
+			: busy === 'enrich'
+				? 'Enriching…'
+				: 'Enrich detail'}
+	</button>
+	<span class="muted small">
+		Pulls description, calories, splits, and segment efforts (1 Strava API call).
+	</span>
+	{#if error}
+		<div class="banner err">{error}</div>
+	{/if}
+</div>
+
+{#if data.splits.length > 0}
+	<div class="card">
+		<h2>Splits ({paceUnit})</h2>
+		<div class="table-scroll">
+			<table>
+				<thead>
+					<tr>
+						<th>#</th>
+						<th>Distance</th>
+						<th>Time</th>
+						<th>Pace</th>
+						<th>Elev Δ</th>
+						<th>Avg HR</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each data.splits as s (s.index)}
+						<tr>
+							<td class="num">{s.index}</td>
+							<td class="num">{fmtDistance(s.distance_m, units)}</td>
+							<td class="num">{fmtDuration(s.moving_time_s)}</td>
+							<td class="num">{fmtPace(s.pace_seconds_per_unit, paceUnit)}</td>
+							<td class="num">{fmtElevation(s.elevation_difference_m, units)}</td>
+							<td class="num">{fmtRound(s.average_heartrate, ' bpm')}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	</div>
+{/if}
+
+{#if data.segments.length > 0}
+	<div class="card">
+		<h2>Segment efforts ({data.segments.length})</h2>
+		<div class="table-scroll">
+			<table>
+				<thead>
+					<tr>
+						<th>Segment</th>
+						<th>Distance</th>
+						<th>Time</th>
+						<th>Avg W</th>
+						<th>Avg HR</th>
+						<th>KOM</th>
+						<th>PR</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each data.segments as s (s.segment_id)}
+						<tr>
+							<td>
+								<a href="https://www.strava.com/segments/{s.segment_id}" target="_blank" rel="noopener noreferrer">
+									{s.segment_name}
+								</a>
+							</td>
+							<td class="num">{fmtDistance(s.distance_m, units)}</td>
+							<td class="num">{fmtDuration(s.moving_time_s)}</td>
+							<td class="num">{fmtRound(s.average_watts, ' W')}</td>
+							<td class="num">{fmtRound(s.average_heartrate, ' bpm')}</td>
+							<td class="num">{s.kom_rank != null ? `#${s.kom_rank}` : '—'}</td>
+							<td class="num">{s.pr_rank != null ? `#${s.pr_rank}` : '—'}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
 	</div>
 {/if}
 
@@ -206,7 +331,34 @@
 	.card {
 		margin-bottom: 16px;
 	}
-	.hint {
+	.desc p {
+		margin: 0;
+		white-space: pre-wrap;
+		font-size: 14px;
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 12px;
+		align-items: center;
+	}
+	.small {
+		font-size: 12px;
+	}
+	.table-scroll {
+		overflow-x: auto;
+	}
+	.num {
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+	}
+	.banner.err {
+		flex-basis: 100%;
+		padding: 8px 12px;
+		border-radius: 6px;
 		font-size: 13px;
+		background: color-mix(in srgb, var(--danger) 15%, var(--bg));
+		border: 1px solid var(--danger);
+		color: var(--danger);
 	}
 </style>
