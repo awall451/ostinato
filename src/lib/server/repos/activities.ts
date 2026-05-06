@@ -26,6 +26,11 @@ export function listActivitiesInRange(
 	return rows;
 }
 
+export function getActivityById(db: DB, id: number): Activity | null {
+	const r = db.select().from(activities).where(eq(activities.id, id)).all();
+	return r[0] ?? null;
+}
+
 export function listActivitiesForGear(db: DB, gearId: string, limit = 200): Activity[] {
 	return db
 		.select()
