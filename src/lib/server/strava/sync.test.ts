@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { eq } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from '../db/schema';
 import { athletes, gear, activities } from '../db/schema';
-import { syncSummaries, syncGearAndAthlete } from './sync';
+import { syncSummaries, syncGearAndAthlete, enrichOne } from './sync';
 import type { StravaClient } from './client';
 import type { StravaAthlete, StravaSummaryActivity } from './types';
 
@@ -167,5 +168,66 @@ describe('syncSummaries — unknown gear_id handling', () => {
 		expect(byId.get(100)!.gear_id).toBe('b_known');
 		expect(byId.get(101)!.gear_id).toBeNull();
 		expect(byId.get(102)!.gear_id).toBeNull();
+	});
+});
+
+describe('enrichOne', () => {
+	function fakeDetailClient(detail: Record<string, unknown>): StravaClient {
+		return {
+			getActivity: async (id: number) => ({ id, ...detail })
+		} as unknown as StravaClient;
+	}
+
+	it('returns { enriched: false } when activity not in DB', async () => {
+		const client = fakeDetailClient({ description: 'x', calories: 100 });
+		const result = await enrichOne(client, db, 999999);
+		expect(result.enriched).toBe(false);
+	});
+
+	it('writes raw_detail_json + applies detail-only fields', async () => {
+		// Seed a summary row first.
+		const now = Math.floor(Date.now() / 1000);
+		db.insert(activities)
+			.values({
+				id: 555,
+				athlete_id: 1,
+				name: 'r',
+				sport_type: 'Ride',
+				start_date: now,
+				start_date_local: now,
+				distance_m: 1000,
+				moving_time_s: 100,
+				elapsed_time_s: 100,
+				total_elevation_gain_m: 0,
+				has_heartrate: 0,
+				created_at: now,
+				updated_at: now
+			})
+			.run();
+
+		const client = fakeDetailClient({
+			description: 'great ride',
+			calories: 720,
+			suffer_score: 42,
+			weighted_average_watts: 220,
+			max_watts: 850,
+			kilojoules: 1230,
+			splits_metric: [{ split: 1, distance: 1000, moving_time: 240, elapsed_time: 245, elevation_difference: 5, average_heartrate: 145 }]
+		});
+
+		const result = await enrichOne(client, db, 555);
+		expect(result.enriched).toBe(true);
+
+		const row = db.select().from(activities).where(eq(activities.id, 555)).all()[0];
+		expect(row.detail_fetched_at).not.toBeNull();
+		expect(row.calories).toBe(720);
+		expect(row.suffer_score).toBe(42);
+		expect(row.weighted_average_watts).toBe(220);
+		expect(row.max_watts).toBe(850);
+		expect(row.kilojoules).toBe(1230);
+		expect(row.raw_detail_json).not.toBeNull();
+		const parsed = JSON.parse(row.raw_detail_json!);
+		expect(parsed.description).toBe('great ride');
+		expect(parsed.splits_metric).toHaveLength(1);
 	});
 });
