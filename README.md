@@ -18,6 +18,28 @@ Generic `Ride` activities are routed to MTB / Gravel / Road by `gear.frame_type`
 at the view boundary, so a 38-mile day at Snowshoe doesn't get filed under
 "Road".
 
+## Quick start
+
+```bash
+cp .env.example .env
+# fill STRAVA_CLIENT_ID + STRAVA_CLIENT_SECRET from https://www.strava.com/settings/api
+# Strava "Authorization Callback Domain" = localhost (bare, no scheme/port/path)
+
+docker compose up --build -d
+# open http://localhost:5173/settings → Connect Strava → Backfill all summaries
+```
+
+For local dev with HMR:
+
+```bash
+npm install
+npm run db:migrate
+npm run dev   # http://localhost:5173
+```
+
+See [CLAUDE.md](CLAUDE.md) for the full dev workflow, container internals,
+TDD loop, and Strava API gotchas.
+
 ## Tour
 
 ### Dashboard
@@ -61,28 +83,6 @@ SVG node count under 600). Splits + segment efforts table render below.
   `INTEGER` booleans, no SQLite-isms)
 - **Pure inline SVG** charts — no chart library
 - **Distroless single-image container** (auto-migrates on boot, runs as nonroot)
-
-## Quick start
-
-```bash
-cp .env.example .env
-# fill STRAVA_CLIENT_ID + STRAVA_CLIENT_SECRET from https://www.strava.com/settings/api
-# Strava "Authorization Callback Domain" = localhost (bare, no scheme/port/path)
-
-docker compose up --build -d
-# open http://localhost:5173/settings → Connect Strava → Backfill all summaries
-```
-
-For local dev with HMR:
-
-```bash
-npm install
-npm run db:migrate
-npm run dev   # http://localhost:5173
-```
-
-See [CLAUDE.md](CLAUDE.md) for the full dev workflow, container internals,
-TDD loop, and Strava API gotchas.
 
 ## Roadmap
 
