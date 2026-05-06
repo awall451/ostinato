@@ -1,5 +1,7 @@
 <script lang="ts">
 	import LineArea from '$lib/components/charts/LineArea.svelte';
+	import Donut from '$lib/components/charts/Donut.svelte';
+	import BarChart from '$lib/components/charts/BarChart.svelte';
 	import Heatmap from '$lib/components/charts/Heatmap.svelte';
 	import { friendlyLabel } from '$lib/shared/sport-types';
 	import {
@@ -11,6 +13,14 @@
 		type UnitSystem
 	} from '$lib/shared/units';
 	import { monthKey } from '$lib/shared/time';
+	import {
+		cumulativeDistance,
+		dayOfWeekBuckets,
+		rideLengthHistogram,
+		sportMixSlices,
+		type ActivityForStats,
+		type GearForSport
+	} from '$lib/shared/gear-stats';
 	import type { Activity, Gear } from '$lib/server/db/schema';
 	import type { GearTotals } from '$lib/server/repos/gear';
 
@@ -92,6 +102,42 @@
 			.map(([key, value]) => ({ label: key.slice(2), value }));
 	});
 
+	const gearById = $derived(
+		new Map<string, GearForSport>([[data.gear.id, { frame_type: data.gear.frame_type }]])
+	);
+
+	const statsActivities = $derived(
+		data.activities.map(
+			(a: Activity): ActivityForStats => ({
+				start_date: a.start_date,
+				start_date_local: a.start_date_local,
+				distance_m: a.distance_m,
+				sport_type: a.sport_type,
+				gear_id: a.gear_id
+			})
+		)
+	);
+
+	const cumulative = $derived.by(() =>
+		cumulativeDistance(statsActivities, units).map((p) => ({
+			...p,
+			label: p.label.slice(2)
+		}))
+	);
+
+	const weekday = $derived.by(() =>
+		dayOfWeekBuckets(statsActivities).map((b) => ({ label: b.day, value: b.rides }))
+	);
+
+	const histogram = $derived.by(() =>
+		rideLengthHistogram(statsActivities, undefined, units).map((b) => ({
+			label: b.label,
+			value: b.count
+		}))
+	);
+
+	const sportMix = $derived(sportMixSlices(statsActivities, gearById));
+
 	function fmtDate(epochSec: number): string {
 		return new Date(epochSec * 1000).toISOString().slice(0, 10);
 	}
@@ -147,6 +193,31 @@
 	<div class="card">
 		<h2>Monthly distance</h2>
 		<LineArea points={monthSparkline} formatValue={(v) => v.toFixed(0)} yAxisLabel=" mi" labelEvery={3} height={80} />
+	</div>
+{/if}
+
+{#if data.activities.length > 0 && data.gear.kind === 'bike'}
+	<div class="chart-grid">
+		<div class="card">
+			<h2>Cumulative distance</h2>
+			<LineArea points={cumulative} formatValue={(v) => v.toFixed(0)} yAxisLabel=" mi" labelEvery={3} height={140} />
+		</div>
+		<div class="card">
+			<h2>Sport mix</h2>
+			{#if sportMix.length === 1}
+				<p class="muted small">All rides logged as <strong>{sportMix[0].name}</strong> ({sportMix[0].value}).</p>
+			{:else}
+				<Donut data={sportMix} size={180} formatValue={(v) => `${Math.round(v)}`} totalLabel="rides" />
+			{/if}
+		</div>
+		<div class="card">
+			<h2>Day of week</h2>
+			<BarChart data={weekday} height={180} formatValue={(v) => v.toFixed(0)} yAxisLabel="" />
+		</div>
+		<div class="card">
+			<h2>Ride length</h2>
+			<BarChart data={histogram} height={180} formatValue={(v) => v.toFixed(0)} yAxisLabel="" color="var(--accent-2)" />
+		</div>
 	</div>
 {/if}
 
@@ -241,6 +312,23 @@
 	}
 	.card {
 		margin-bottom: 16px;
+	}
+	.chart-grid {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 16px;
+		margin-bottom: 16px;
+	}
+	.chart-grid .card {
+		margin-bottom: 0;
+	}
+	.small {
+		font-size: 12px;
+	}
+	@media (max-width: 768px) {
+		.chart-grid {
+			grid-template-columns: 1fr;
+		}
 	}
 	.table-scroll {
 		overflow-x: auto;
