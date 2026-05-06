@@ -15,6 +15,7 @@ export type SplitRow = {
 };
 
 export type SegmentEffortRow = {
+	effort_id: number;
 	segment_id: number;
 	segment_name: string;
 	distance_m: number;
@@ -104,6 +105,8 @@ export function parseSegmentEfforts(detail: Detail): SegmentEffortRow[] {
 		const segId = asNum(seg?.id);
 		if (segId == null) continue;
 		rows.push({
+			// stub for issue #31; green commit populates from e.id and skips when missing
+			effort_id: 0,
 			segment_id: segId,
 			segment_name: asStr(seg?.name) ?? `segment ${segId}`,
 			distance_m: asNum(e.distance) ?? 0,
