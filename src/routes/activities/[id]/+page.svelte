@@ -363,7 +363,7 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each data.segments as s (s.segment_id)}
+					{#each data.segments as s (s.effort_id)}
 						<tr>
 							<td>
 								<a href="https://www.strava.com/segments/{s.segment_id}" target="_blank" rel="noopener noreferrer">

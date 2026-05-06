@@ -15,6 +15,7 @@ export type SplitRow = {
 };
 
 export type SegmentEffortRow = {
+	effort_id: number;
 	segment_id: number;
 	segment_name: string;
 	distance_m: number;
@@ -102,8 +103,10 @@ export function parseSegmentEfforts(detail: Detail): SegmentEffortRow[] {
 		if (!e) continue;
 		const seg = asObj(e.segment);
 		const segId = asNum(seg?.id);
-		if (segId == null) continue;
+		const effortId = asNum(e.id);
+		if (segId == null || effortId == null) continue;
 		rows.push({
+			effort_id: effortId,
 			segment_id: segId,
 			segment_name: asStr(seg?.name) ?? `segment ${segId}`,
 			distance_m: asNum(e.distance) ?? 0,

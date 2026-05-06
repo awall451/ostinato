@@ -70,6 +70,7 @@ describe('parseSegmentEfforts', () => {
 	const sampleDetail = {
 		segment_efforts: [
 			{
+				id: 1001,
 				segment: { id: 12345, name: 'Big Climb' },
 				distance: 850,
 				moving_time: 240,
@@ -80,6 +81,7 @@ describe('parseSegmentEfforts', () => {
 				pr_rank: 1
 			},
 			{
+				id: 1002,
 				segment: { id: 67890, name: 'Sprint Section' },
 				distance: 200,
 				moving_time: 18,
@@ -101,6 +103,7 @@ describe('parseSegmentEfforts', () => {
 		const rows = parseSegmentEfforts(sampleDetail);
 		expect(rows).toHaveLength(2);
 		expect(rows[0]).toEqual({
+			effort_id: 1001,
 			segment_id: 12345,
 			segment_name: 'Big Climb',
 			distance_m: 850,
@@ -119,11 +122,42 @@ describe('parseSegmentEfforts', () => {
 		const detail = {
 			segment_efforts: [
 				{ segment: { name: 'Bad' }, distance: 100, moving_time: 10, elapsed_time: 10 },
-				{ segment: { id: 1, name: 'Good' }, distance: 100, moving_time: 10, elapsed_time: 10 }
+				{ id: 99, segment: { id: 1, name: 'Good' }, distance: 100, moving_time: 10, elapsed_time: 10 }
 			]
 		};
 		const rows = parseSegmentEfforts(detail);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].segment_id).toBe(1);
+	});
+
+	// Issue #31: rides with repeated segments (laps, downhill repeats) produce
+	// multiple efforts with the same segment_id. The page keys its each-block
+	// by segment_id, which crashes hydration on duplicate keys. Each row must
+	// carry the per-effort id so the page can key uniquely.
+	it('preserves repeated efforts on the same segment with distinct effort_id', () => {
+		const detail = {
+			segment_efforts: [
+				{ id: 100, segment: { id: 12345, name: 'Snowshoe Pro' }, distance: 850, moving_time: 240, elapsed_time: 245 },
+				{ id: 101, segment: { id: 12345, name: 'Snowshoe Pro' }, distance: 850, moving_time: 235, elapsed_time: 240 }
+			]
+		};
+		const rows = parseSegmentEfforts(detail);
+		expect(rows).toHaveLength(2);
+		expect(rows[0].effort_id).toBe(100);
+		expect(rows[1].effort_id).toBe(101);
+		expect(rows[0].segment_id).toBe(rows[1].segment_id);
+		expect(rows[0].effort_id).not.toBe(rows[1].effort_id);
+	});
+
+	it('skips entries lacking an effort id', () => {
+		const detail = {
+			segment_efforts: [
+				{ segment: { id: 1, name: 'No effort id' }, distance: 100, moving_time: 10, elapsed_time: 10 },
+				{ id: 7, segment: { id: 2, name: 'Good' }, distance: 100, moving_time: 10, elapsed_time: 10 }
+			]
+		};
+		const rows = parseSegmentEfforts(detail);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].effort_id).toBe(7);
 	});
 });
