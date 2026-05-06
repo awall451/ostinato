@@ -181,7 +181,7 @@
 					{#each sorted as a (a.id)}
 						<tr>
 							<td class="muted">{fmtDate(a.start_date)}</td>
-							<td>{a.name}</td>
+							<td><a href="/activities/{a.id}" class="row-link">{a.name}</a></td>
 							<td><span class="pill">{friendlyLabel(a.sport_type)}</span></td>
 							<td class="num">{fmtDistance(a.distance_m, units)}</td>
 							<td class="num">{fmtDuration(a.moving_time_s)}</td>
@@ -261,5 +261,13 @@
 	.num {
 		font-variant-numeric: tabular-nums;
 		text-align: right;
+	}
+	.row-link {
+		color: inherit;
+		text-decoration: none;
+	}
+	.row-link:hover {
+		color: var(--accent);
+		text-decoration: underline;
 	}
 </style>
