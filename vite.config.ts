@@ -1,13 +1,16 @@
 import { sveltekit } from '@sveltejs/kit/vite';
+import { svelteTesting } from '@testing-library/svelte/vite';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-	plugins: [sveltekit()],
+	plugins: [sveltekit(), svelteTesting()],
 	server: {
 		port: 5173,
 		host: '0.0.0.0'
 	},
 	test: {
-		include: ['src/**/*.test.ts']
+		include: ['src/**/*.test.ts'],
+		environment: 'jsdom',
+		setupFiles: ['./vitest.setup.ts']
 	}
 });
