@@ -1,0 +1,19 @@
+apiVersion: v2
+name: ostinato
+description: |
+  Personal cycling/running data visualization app. SvelteKit + Drizzle
+  + better-sqlite3 in a distroless runtime. Single-replica by design
+  because the SQLite file is local to one Pod.
+type: application
+version: 0.1.0
+appVersion: "0.0.1"
+keywords:
+  - strava
+  - cycling
+  - sveltekit
+home: https://github.com/awall451/ostinato
+sources:
+  - https://github.com/awall451/ostinato
+maintainers:
+  - name: dillon
+    url: https://github.com/awall451
