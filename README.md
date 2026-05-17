@@ -4,6 +4,17 @@
 
 ![dashboard](docs/screenshots/dashboard.png)
 
+> [!IMPORTANT]
+> **`main` is the active development branch.** It may break at any time.
+> For a deployment you can trust, install from the [latest
+> release](https://github.com/awall451/ostinato/releases/latest) or pull
+> the `:latest` image tag from GHCR:
+> ```bash
+> docker pull ghcr.io/awall451/ostinato:latest
+> ```
+> The `:edge` tag tracks every commit to `main`; pin to `:vX.Y.Z` if you
+> want immutability.
+
 An *ostinato* is a musical motif that repeats. Same routes, different bikes,
 over and over.
 

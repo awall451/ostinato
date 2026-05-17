@@ -1,0 +1,129 @@
+# Defaults for the ostinato Helm chart. Vanilla Kubernetes — no
+# assumptions about Tailscale, Sealed Secrets, or any specific cluster.
+# Override per environment with --set, -f overlays, or a parent
+# `values:` block in an Argo Application.
+
+image:
+  repository: ghcr.io/awall451/ostinato
+  # Default tag intentionally empty so installs fail loudly rather than
+  # silently pulling :latest. Pin to a SHA, semver, or ":edge" yourself.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# better-sqlite3 holds an exclusive file lock — running more than one
+# Pod corrupts the DB. Do not raise.
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 5173
+
+# Standard Kubernetes Ingress. Compatible with ingress-nginx, Traefik,
+# Tailscale Operator (set defaultBackend.enabled=true for the Tailscale
+# style, which doesn't use rules), and most others.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # ingress-nginx example:  nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    # Tailscale Operator:     tailscale.com/hostname: ostinato
+  # Standard rules-based mode (ingress-nginx, Traefik, etc).
+  hosts:
+    - host: ostinato.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: ostinato-tls
+    #   hosts: [ostinato.example.com]
+  # Tailscale-style: single defaultBackend, no rules. When `enabled`,
+  # `hosts` is ignored. `tls.hosts` should be the bare hostname (the
+  # operator combines it with the tailnet suffix).
+  defaultBackend:
+    enabled: false
+
+persistence:
+  enabled: true
+  # Empty = use the cluster's default StorageClass (e.g. local-path on
+  # k3s, gp3 on EKS).
+  storageClassName: ""
+  size: 5Gi
+  accessMode: ReadWriteOnce
+  # If set, reuse this PVC instead of creating one (useful if you've
+  # pre-bound to a specific PV).
+  existingClaim: ""
+
+# Non-secret env vars. PORT / HOST / OSTINATO_*_PATH are already set in
+# the Dockerfile and don't need overriding.
+env:
+  NODE_ENV: production
+  # The full callback URL Strava redirects the user back to. Must match
+  # one of the Authorization Callback Domains in your Strava app.
+  STRAVA_REDIRECT_URI: ""
+
+# Strava OAuth credentials. Provide via ONE of:
+#
+#   a) `existingSecret`: name of an existing Secret in this namespace
+#      with keys STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET. Recommended
+#      for generic installs:
+#          kubectl create secret generic my-strava \
+#            --from-literal=STRAVA_CLIENT_ID=... \
+#            --from-literal=STRAVA_CLIENT_SECRET=...
+#
+#   b) Plain `clientId` / `clientSecret` values. The chart renders a
+#      Secret from these. DEV / TEST ONLY — values are visible via
+#      `helm get values`.
+#
+#   c) `sealed.clientId` / `sealed.clientSecret`: kubeseal-encrypted
+#      bytes. The chart renders a SealedSecret; requires the
+#      bitnami-labs/sealed-secrets controller in the cluster.
+#
+# Pick exactly one path. If multiple are set, precedence is:
+#   existingSecret > plain values > sealed values.
+strava:
+  existingSecret: ""
+  clientId: ""
+  clientSecret: ""
+  sealed:
+    clientId: ""
+    clientSecret: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+probes:
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 15
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+
+# Distroless nonroot user (uid 65532) — matches the Dockerfile.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Override the chart name / fully-qualified name. Leave empty unless
+# you really need to.
+nameOverride: ""
+fullnameOverride: ""
