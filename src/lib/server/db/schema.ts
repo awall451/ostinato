@@ -121,6 +121,59 @@ export const activity_streams = sqliteTable(
 	]
 );
 
+/**
+ * Bike components (chain, tires, cassette, ...). Mileage is never stored —
+ * it's derived from `component_installs` intervals joined to `activities`
+ * (see repos/components.ts), so backdated installs and re-tagged rides
+ * recompute automatically. Not touched by Strava sync.
+ */
+export const components = sqliteTable(
+	'components',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		athlete_id: integer('athlete_id')
+			.notNull()
+			.references(() => athletes.id),
+		kind: text('kind').notNull(), // see COMPONENT_KINDS in shared/components.ts
+		brand: text('brand'),
+		model: text('model'),
+		notes: text('notes'),
+		purchase_price_cents: integer('purchase_price_cents'),
+		purchased_at: integer('purchased_at'), // epoch seconds (date at UTC midnight)
+		starting_distance_m: real('starting_distance_m').notNull().default(0), // used parts
+		wear_limit_m: real('wear_limit_m'),
+		count_trainer: integer('count_trainer').notNull().default(1), // 0 = skip trainer/VirtualRide (tires)
+		retired: integer('retired').notNull().default(0), // worn out / binned
+		created_at: integer('created_at').notNull(),
+		updated_at: integer('updated_at').notNull()
+	},
+	(t) => [index('idx_components_athlete').on(t.athlete_id)]
+);
+
+/**
+ * Half-open install intervals [installed_at, removed_at) compared against
+ * `activities.start_date_local`. Both stored as the local date at UTC
+ * midnight, so a ride on swap day counts toward the new part.
+ */
+export const component_installs = sqliteTable(
+	'component_installs',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		component_id: integer('component_id')
+			.notNull()
+			.references(() => components.id, { onDelete: 'cascade' }),
+		gear_id: text('gear_id')
+			.notNull()
+			.references(() => gear.id),
+		installed_at: integer('installed_at').notNull(),
+		removed_at: integer('removed_at') // NULL = still installed
+	},
+	(t) => [
+		index('idx_installs_component').on(t.component_id),
+		index('idx_installs_gear').on(t.gear_id)
+	]
+);
+
 export const sync_state = sqliteTable('sync_state', {
 	id: integer('id').primaryKey(), // always 1; single-row table
 	last_after_epoch: integer('last_after_epoch'),
@@ -142,3 +195,6 @@ export type ActivityInsert = typeof activities.$inferInsert;
 export type SyncState = typeof sync_state.$inferSelect;
 export type ActivityStream = typeof activity_streams.$inferSelect;
 export type ActivityStreamInsert = typeof activity_streams.$inferInsert;
+export type Component = typeof components.$inferSelect;
+export type ComponentInsert = typeof components.$inferInsert;
+export type ComponentInstall = typeof component_installs.$inferSelect;

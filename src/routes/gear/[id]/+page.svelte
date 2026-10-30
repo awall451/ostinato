@@ -21,11 +21,21 @@
 		type ActivityForStats,
 		type GearForSport
 	} from '$lib/shared/gear-stats';
+	import ComponentsTab from '$lib/components/ComponentsTab.svelte';
 	import type { Activity, Gear } from '$lib/server/db/schema';
 	import type { GearTotals } from '$lib/server/repos/gear';
+	import type { ComponentRow } from '$lib/server/repos/components';
 
-	let { data } = $props<{
-		data: { gear: Gear; totals: GearTotals | null; activities: Activity[] };
+	let { data, form } = $props<{
+		data: {
+			gear: Gear;
+			totals: GearTotals | null;
+			activities: Activity[];
+			tab: 'overview' | 'components';
+			parts: { installed: ComponentRow[]; history: ComponentRow[] };
+			spares: ComponentRow[];
+		};
+		form: { error?: string } | null;
 	}>();
 
 	const units: UnitSystem = 'imperial';
@@ -152,6 +162,23 @@
 	</div>
 </div>
 
+{#if data.gear.kind === 'bike'}
+	<nav class="tabs">
+		<a href="/gear/{data.gear.id}" class:active={data.tab === 'overview'} data-sveltekit-noscroll>Overview</a>
+		<a href="/gear/{data.gear.id}?tab=components" class:active={data.tab === 'components'} data-sveltekit-noscroll>
+			Components{#if data.parts.installed.length > 0}<span class="count">{data.parts.installed.length}</span>{/if}
+		</a>
+	</nav>
+{/if}
+
+{#if data.tab === 'components'}
+	<ComponentsTab
+		installed={data.parts.installed}
+		history={data.parts.history}
+		spares={data.spares}
+		error={form?.error ?? null}
+	/>
+{:else}
 {#if data.totals}
 	<div class="totals">
 		<div class="card t">
@@ -269,8 +296,40 @@
 		</div>
 	{/if}
 </div>
+{/if}
 
 <style>
+	.tabs {
+		display: flex;
+		gap: 4px;
+		border-bottom: 1px solid var(--border);
+		margin-bottom: 16px;
+	}
+	.tabs a {
+		padding: 8px 14px;
+		color: var(--fg-muted);
+		border-bottom: 2px solid transparent;
+		margin-bottom: -1px;
+		font-weight: 600;
+		text-decoration: none;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.tabs a:hover {
+		color: var(--fg);
+	}
+	.tabs a.active {
+		color: var(--accent);
+		border-bottom-color: var(--accent);
+	}
+	.count {
+		font-size: 11px;
+		background: var(--surface);
+		border-radius: 999px;
+		padding: 0 7px;
+		color: var(--fg-soft);
+	}
 	.back {
 		display: inline-block;
 		margin-bottom: 12px;
